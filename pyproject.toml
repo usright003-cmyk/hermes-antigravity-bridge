@@ -26,6 +26,23 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
 ]
+keywords = [
+  "hermes",
+  "hermes-agent",
+  "antigravity",
+  "deepmind",
+  "llm",
+  "openai-compatible",
+  "streaming",
+  "ai-agents",
+]
+
+[project.urls]
+Homepage = "https://github.com/usright003-cmyk/hermes-antigravity-bridge"
+Documentation = "https://github.com/usright003-cmyk/hermes-antigravity-bridge#readme"
+Repository = "https://github.com/usright003-cmyk/hermes-antigravity-bridge.git"
+Issues = "https://github.com/usright003-cmyk/hermes-antigravity-bridge/issues"
+Changelog = "https://github.com/usright003-cmyk/hermes-antigravity-bridge/releases"
 
 [project.scripts]
 hermes-antigravity-bridge = "hermes_antigravity_bridge.cli:main"

@@ -104,6 +104,16 @@ class ChatCompletionServiceTests(unittest.TestCase):
                 "tools": [{"type": "function", "function": {}}],
             })
 
+    def test_complete_stream_yields_events(self):
+        service, _ = self.make_service("STREAMED_TEXT")
+        events = list(service.complete_stream({
+            "model": "model-a",
+            "stream": True,
+            "messages": [{"role": "user", "content": "hello"}],
+        }))
+        self.assertTrue(any(e["type"] == "delta" and e["content"] == "STREAMED_TEXT" for e in events))
+        self.assertTrue(any(e["type"] == "finish" and e["finish_reason"] == "stop" for e in events))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from typing import Any
 
 from .contracts import ChatCompletionResult, TextBackend
@@ -177,6 +178,132 @@ class ChatCompletionService:
             requested_model=requested,
             actual_model=actual_model,
         )
+
+    def complete_stream(self, body: Any) -> Iterator[dict[str, Any]]:
+        requested, messages, tools = self.validate_request(body)
+        actual_model = self.backend.resolve_model(requested)
+        max_chars = self.prompt_budget.effective_chars(
+            actual_model,
+            body.get("max_tokens") if isinstance(body, dict) else None,
+        )
+        prompt = self.prompt_builder.build(
+            messages,
+            tools=tools or None,
+            max_chars=max_chars,
+        )
+        _LOG.info(
+            "context stream model=%s messages=%d prompt_chars=%d limit=%d",
+            actual_model,
+            len(messages),
+            len(prompt),
+            max_chars,
+        )
+        allowed_names = {
+            str(tool["function"]["name"])
+            for tool in tools
+            if isinstance(tool.get("function"), dict)
+        }
+
+        if hasattr(self.backend, "generate_stream"):
+            stream_gen = self.backend.generate_stream(prompt, actual_model)
+            accumulated_text = ""
+            has_tool_call_start = False
+            for event in stream_gen:
+                etype = event.get("type")
+                if etype == "delta":
+                    text = str(event.get("content", ""))
+                    accumulated_text += text
+                    if "<tool_call" in accumulated_text:
+                        has_tool_call_start = True
+                    elif not has_tool_call_start:
+                        yield {
+                            "type": "delta",
+                            "content": text,
+                            "requested_model": requested,
+                            "actual_model": actual_model,
+                        }
+                elif etype == "result":
+                    backend_response = event["response"]
+                    parsed = parse_tool_calls(
+                        backend_response.response,
+                        allowed_tool_names=allowed_names,
+                    )
+                    usage = backend_response.usage
+                    normalized_usage = {
+                        "prompt_tokens": int(usage.get("input_tokens", 0) or 0),
+                        "completion_tokens": int(usage.get("output_tokens", 0) or 0),
+                        "total_tokens": int(usage.get("total_tokens", 0) or 0),
+                    }
+                    if parsed.tool_calls:
+                        yield {
+                            "type": "tool_calls",
+                            "tool_calls": parsed.tool_calls,
+                            "requested_model": requested,
+                            "actual_model": actual_model,
+                        }
+                        yield {
+                            "type": "finish",
+                            "finish_reason": "tool_calls",
+                            "usage": normalized_usage,
+                            "requested_model": requested,
+                            "actual_model": actual_model,
+                        }
+                    else:
+                        if has_tool_call_start and parsed.text:
+                            yield {
+                                "type": "delta",
+                                "content": parsed.text,
+                                "requested_model": requested,
+                                "actual_model": actual_model,
+                            }
+                        yield {
+                            "type": "finish",
+                            "finish_reason": "stop",
+                            "usage": normalized_usage,
+                            "requested_model": requested,
+                            "actual_model": actual_model,
+                        }
+                    return
+        else:
+            backend_result = self.backend.generate(prompt, actual_model)
+            parsed = parse_tool_calls(
+                backend_result.response,
+                allowed_tool_names=allowed_names,
+            )
+            usage = backend_result.usage
+            normalized_usage = {
+                "prompt_tokens": int(usage.get("input_tokens", 0) or 0),
+                "completion_tokens": int(usage.get("output_tokens", 0) or 0),
+                "total_tokens": int(usage.get("total_tokens", 0) or 0),
+            }
+            if parsed.tool_calls:
+                yield {
+                    "type": "tool_calls",
+                    "tool_calls": parsed.tool_calls,
+                    "requested_model": requested,
+                    "actual_model": actual_model,
+                }
+                yield {
+                    "type": "finish",
+                    "finish_reason": "tool_calls",
+                    "usage": normalized_usage,
+                    "requested_model": requested,
+                    "actual_model": actual_model,
+                }
+            else:
+                yield {
+                    "type": "delta",
+                    "content": parsed.text,
+                    "requested_model": requested,
+                    "actual_model": actual_model,
+                }
+                yield {
+                    "type": "finish",
+                    "finish_reason": "stop",
+                    "usage": normalized_usage,
+                    "requested_model": requested,
+                    "actual_model": actual_model,
+                }
 
     def list_models(self, *, force_refresh: bool = False) -> tuple[str, ...]:
         return self.backend.list_models(force_refresh=force_refresh)

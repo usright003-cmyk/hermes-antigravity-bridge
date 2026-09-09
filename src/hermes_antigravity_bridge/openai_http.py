@@ -305,18 +305,108 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, UnicodeDecodeError):
             self._error(400, "request body is not valid UTF-8 JSON", "invalid_request_error")
             return
+        if bool(body.get("stream")):
+            self._stream_response(body)
+            return
+
         try:
             result = self.bridge_server.chat_service.complete(body)
             response = self._completion_response(result)
-            if bool(body.get("stream")):
-                self._send(200, self._sse_response(response), "text/event-stream")
-            else:
-                self._send(200, response)
+            self._send(200, response)
         except BridgeError as exc:
             self._error(exc.status_code, _safe_client_message(exc), exc.error_type)
         except Exception:  # noqa: BLE001 - sanitize unexpected failures at the HTTP boundary
             _LOG.exception("unexpected bridge request failure")
             self._error(500, "internal bridge error", "internal_error")
+
+    def _stream_response(self, body: Any) -> None:
+        try:
+            stream_iter = self.bridge_server.chat_service.complete_stream(body)
+            first_item = next(stream_iter, None)
+        except BridgeError as exc:
+            self._error(exc.status_code, _safe_client_message(exc), exc.error_type)
+            return
+        except Exception:  # noqa: BLE001
+            _LOG.exception("unexpected error before stream start")
+            self._error(500, "internal bridge error", "internal_error")
+            return
+
+        stream_id = "chatcmpl-" + uuid.uuid4().hex
+        now = int(time.time())
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "close")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+
+            def emit_item(item: dict[str, Any]) -> None:
+                itype = item.get("type")
+                if itype == "delta":
+                    chunk = {
+                        "id": stream_id,
+                        "object": "chat.completion.chunk",
+                        "created": now,
+                        "model": item.get("requested_model", ""),
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"content": item["content"], "role": "assistant"},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                    self.wfile.write(b"data: " + _json_bytes(chunk) + b"\n\n")
+                    self.wfile.flush()
+                elif itype == "tool_calls":
+                    chunk = {
+                        "id": stream_id,
+                        "object": "chat.completion.chunk",
+                        "created": now,
+                        "model": item.get("requested_model", ""),
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"tool_calls": item["tool_calls"]},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                    self.wfile.write(b"data: " + _json_bytes(chunk) + b"\n\n")
+                    self.wfile.flush()
+                elif itype == "finish":
+                    chunk = {
+                        "id": stream_id,
+                        "object": "chat.completion.chunk",
+                        "created": now,
+                        "model": item.get("requested_model", ""),
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {},
+                                "finish_reason": item.get("finish_reason", "stop"),
+                            }
+                        ],
+                    }
+                    if item.get("usage") and body.get("stream_options", {}).get("include_usage"):
+                        chunk["usage"] = item["usage"]
+                    self.wfile.write(b"data: " + _json_bytes(chunk) + b"\n\n")
+                    self.wfile.flush()
+
+            if first_item is not None:
+                emit_item(first_item)
+                for item in stream_iter:
+                    emit_item(item)
+
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            _LOG.info("client disconnected during stream")
+        except BridgeError as exc:
+            _LOG.warning("bridge error during active stream: %s", exc)
+        except Exception:  # noqa: BLE001
+            _LOG.exception("unexpected error during active stream")
 
     def _completion_response(self, result: Any) -> dict[str, Any]:
         message: dict[str, Any] = {

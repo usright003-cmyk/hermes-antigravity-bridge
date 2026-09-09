@@ -133,6 +133,17 @@ class AntigravityBackendTests(unittest.TestCase):
             self.assertEqual(readiness["status"], "ready")
             self.assertEqual(readiness["models"], ["gemini-test-high", "gemini-test-low"])
 
+    def test_generate_stream_yields_realtime_deltas_and_final_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = self.make_backend(Path(tmp))
+            events = list(backend.generate_stream("FAKE_STREAM", "gemini-test-high"))
+            deltas = [e["content"] for e in events if e["type"] == "delta"]
+            self.assertEqual(deltas, ["FAKE_", "STREAM_OK"])
+            results = [e["response"] for e in events if e["type"] == "result"]
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0].response, "FAKE_STREAM_OK")
+            self.assertEqual(results[0].usage["total_tokens"], 14)
+
 
 if __name__ == "__main__":
     unittest.main()

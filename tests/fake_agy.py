@@ -24,7 +24,17 @@ if "FAKE_SLEEP" in prompt:
     time.sleep(5)
 if "FAKE_TOOL_EVENT" in prompt:
     print(json.dumps({"event": "tool_call", "tool": {"name": "terminal", "arguments": {"command": "touch forbidden"}}}), flush=True)
-if "FAKE_EMPTY" in prompt:
+elif "FAKE_STREAM" in prompt:
+    print(json.dumps({"event": "step_update", "step_update": {"text_delta": "FAKE_", "step_type": "agent_response"}}), flush=True)
+    print(json.dumps({"event": "step_update", "step_update": {"text_delta": "STREAM_OK", "step_type": "agent_response"}}), flush=True)
+    result = {
+        "status": "SUCCESS",
+        "response": "FAKE_STREAM_OK",
+        "duration_seconds": 0.02,
+        "usage": {"input_tokens": 10, "output_tokens": 4, "thinking_tokens": 0, "cache_read_tokens": 0, "total_tokens": 14},
+        "conversation_id": "fake-stream",
+    }
+elif "FAKE_EMPTY" in prompt:
     result = {
         "status": "SUCCESS",
         "response": "",

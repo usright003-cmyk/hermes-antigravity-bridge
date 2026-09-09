@@ -469,14 +469,14 @@ class AntigravityBackend:
         def on_delta(delta: str) -> None:
             delta_queue.put({"type": "delta", "content": delta})
 
-        worker_error: list[BaseException] = []
+        worker_error: list[Exception] = []
         final_result: list[dict[str, Any]] = []
 
         def worker() -> None:
             try:
                 res = self._run_attempt(prompt, model, request_dir, on_delta=on_delta)
                 final_result.append(res)
-            except BaseException as exc:
+            except Exception as exc:
                 worker_error.append(exc)
             finally:
                 delta_queue.put({"type": "done"})

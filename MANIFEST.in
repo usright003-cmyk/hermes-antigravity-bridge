@@ -1,0 +1,6 @@
+include LICENSE README.md SECURITY.md CHANGELOG.md CONTRIBUTING.md
+recursive-include config *.toml
+recursive-include deploy *.service
+recursive-include scripts *.sh
+recursive-include docs *.md
+recursive-include tests *.py *.json

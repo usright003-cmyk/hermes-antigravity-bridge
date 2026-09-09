@@ -1,0 +1,31 @@
+[server]
+host = "127.0.0.1"
+port = 8765
+token_file = "~/.config/hermes-antigravity-bridge/bridge.token"
+allow_remote = false
+request_body_limit_bytes = 8388608
+max_concurrent_requests = 4
+
+[antigravity]
+binary = "agy"
+default_model = "gemini-3.8-flash-high"
+timeout_seconds = 300
+sandbox = true
+mode = "plan"
+enforce_tool_isolation = true
+home = "~/.local/state/hermes-antigravity-bridge/agy-home"
+runtime_dir = "~/.local/share/hermes-antigravity-bridge/runtime"
+model_cache_ttl_seconds = 60
+max_attempts = 3
+validated_versions = ["1.1.28"]
+
+[prompt]
+max_chars = 64000
+output_token_reserve = 8192
+
+[prompt.model_context_tokens]
+# Add only limits verified from authoritative provider documentation.
+
+[logging]
+level = "INFO"
+include_prompt_content = false

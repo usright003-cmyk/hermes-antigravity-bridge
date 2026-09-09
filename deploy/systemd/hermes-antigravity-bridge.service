@@ -1,0 +1,25 @@
+[Unit]
+Description=Hermes Agent to Antigravity bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@RUNTIME_DIR@
+ExecStart=@EXECUTABLE@ --config @CONFIG_FILE@ serve
+Environment=HOME=@HOME@
+Environment=AGY_HOME=@AGY_HOME@
+Environment=PATH=@HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@AGY_HOME@ @RUNTIME_DIR@
+RestrictSUIDSGID=true
+LockPersonality=true
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

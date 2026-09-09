@@ -1,0 +1,118 @@
+{
+  "reference_server_sha256": "3702f5ef3e10f532487777ffcfe7b91b573ce1ec73b665d17f511acd37c28e9a",
+  "cases": [
+    {
+      "name": "simple_memory_and_latest",
+      "messages": [
+        {
+          "role": "system",
+          "content": "Hermes memory marker: blue-orchid"
+        },
+        {
+          "role": "user",
+          "content": "old topic"
+        },
+        {
+          "role": "assistant",
+          "content": "old answer"
+        },
+        {
+          "role": "user",
+          "content": "LATEST_GOLDEN_1001"
+        }
+      ],
+      "tools": [],
+      "max_chars": 64000,
+      "expected_length": 1107,
+      "expected_sha256": "09c40719fadc778ff7d7faf99fe07d7035d17137b432a501b2f5ee09d4b7413e",
+      "expected_prompt": "You are the model inside an existing Hermes Agent session.\nHermes—not this bridge—owns memory, tools, session identity, and conversation history.\nTreat HERMES_SYSTEM_INSTRUCTIONS as authoritative.\nUse RECENT_CONVERSATION_JSONL only as ordered context.\nThe final CURRENT_USER_REQUEST_JSON is the current request and overrides older topics.\nNever answer an older request merely because it is longer or more detailed.\n# Tool Call Rules\nWhen a listed Hermes tool is required, emit exactly one or more blocks in this form:\n<tool_call>{\"id\":\"call_unique\",\"type\":\"function\",\"function\":{\"name\":\"TOOL_NAME\",\"arguments\":{}}}</tool_call>\nWhen no tool is required, answer normally and emit no <tool_call> tag.\n\n# HERMES_SYSTEM_INSTRUCTIONS\n[SYSTEM]\nHermes memory marker: blue-orchid\n# HERMES_TOOL_SCHEMAS_JSONL\n\n# RECENT_CONVERSATION_JSONL\n{\"role\":\"user\",\"content\":\"old topic\"}\n{\"role\":\"assistant\",\"content\":\"old answer\"}\n# CURRENT_USER_REQUEST_JSON\n{\"role\":\"user\",\"content\":\"LATEST_GOLDEN_1001\"}\n# CURRENT_REQUEST_GUARD\nAnswer CURRENT_USER_REQUEST_JSON, using the system instructions, memory, and recent context above."
+    },
+    {
+      "name": "tool_schema_and_tool_result",
+      "messages": [
+        {
+          "role": "system",
+          "content": "Hermes owns tools."
+        },
+        {
+          "role": "user",
+          "content": "Read a file"
+        },
+        {
+          "role": "assistant",
+          "content": "",
+          "tool_calls": [
+            {
+              "function": {
+                "name": "read_file",
+                "arguments": "{\"path\":\"notes.txt\"}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "name": "read_file",
+          "tool_call_id": "call_1",
+          "content": "TOOL_RESULT_OK"
+        },
+        {
+          "role": "user",
+          "content": "LATEST_TOOL_GOLDEN_2002"
+        }
+      ],
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "description": "Read a text file",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "Path"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          }
+        }
+      ],
+      "max_chars": 64000,
+      "expected_length": 1383,
+      "expected_sha256": "cf766a6c3e24dd6c31cde4134c2b97173483ae70e9589a5d1b973cce21ea7908",
+      "expected_prompt": "You are the model inside an existing Hermes Agent session.\nHermes—not this bridge—owns memory, tools, session identity, and conversation history.\nTreat HERMES_SYSTEM_INSTRUCTIONS as authoritative.\nUse RECENT_CONVERSATION_JSONL only as ordered context.\nThe final CURRENT_USER_REQUEST_JSON is the current request and overrides older topics.\nNever answer an older request merely because it is longer or more detailed.\n# Tool Call Rules\nWhen a listed Hermes tool is required, emit exactly one or more blocks in this form:\n<tool_call>{\"id\":\"call_unique\",\"type\":\"function\",\"function\":{\"name\":\"TOOL_NAME\",\"arguments\":{}}}</tool_call>\nWhen no tool is required, answer normally and emit no <tool_call> tag.\n\n# HERMES_SYSTEM_INSTRUCTIONS\n[SYSTEM]\nHermes owns tools.\n# HERMES_TOOL_SCHEMAS_JSONL\n{\"name\":\"read_file\",\"description\":\"Read a text file\",\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}}\n# RECENT_CONVERSATION_JSONL\n{\"role\":\"user\",\"content\":\"Read a file\"}\n{\"role\":\"assistant\",\"content\":\"[assistant tool calls: read_file({\\\"path\\\":\\\"notes.txt\\\"})]\"}\n{\"role\":\"tool\",\"content\":\"TOOL_RESULT_OK\",\"tool_name\":\"read_file\",\"tool_call_id\":\"call_1\"}\n# CURRENT_USER_REQUEST_JSON\n{\"role\":\"user\",\"content\":\"LATEST_TOOL_GOLDEN_2002\"}\n# CURRENT_REQUEST_GUARD\nAnswer CURRENT_USER_REQUEST_JSON, using the system instructions, memory, and recent context above."
+    },
+    {
+      "name": "pathological_non_latest_compaction",
+      "generator": {
+        "kind": "pathological_non_latest",
+        "system_repeat": 100000,
+        "latest_repeat": 700
+      },
+      "tools": [],
+      "max_chars": 64000,
+      "expected_length": 1857,
+      "expected_sha256": "381c347aca54864c1d9fc218eed4b36306428f2f6c2ba4d19ad483e800650651",
+      "expected_prompt": "You are the model inside an existing Hermes Agent session.\nHermes—not this bridge—owns memory, tools, session identity, and conversation history.\nTreat HERMES_SYSTEM_INSTRUCTIONS as authoritative.\nUse RECENT_CONVERSATION_JSONL only as ordered context.\nThe final CURRENT_USER_REQUEST_JSON is the current request and overrides older topics.\nNever answer an older request merely because it is longer or more detailed.\n# Tool Call Rules\nWhen a listed Hermes tool is required, emit exactly one or more blocks in this form:\n<tool_call>{\"id\":\"call_unique\",\"type\":\"function\",\"function\":{\"name\":\"TOOL_NAME\",\"arguments\":{}}}</tool_call>\nWhen no tool is required, answer normally and emit no <tool_call> tag.\n\n# HERMES_SYSTEM_INSTRUCTIONS\n[SYSTEM]\nSYSTEM_HEAD\n[bridge compacted repeated character U+0073 x 100000]\nMEMORY_TAIL\n# HERMES_TOOL_SCHEMAS_JSONL\n\n# RECENT_CONVERSATION_JSONL\n{\"role\":\"user\",\"content\":\"old topic\"}\n{\"role\":\"assistant\",\"content\":\"old answer\"}\n# CURRENT_USER_REQUEST_JSON\n{\"role\":\"user\",\"content\":\"LATEST_LOW_ENTROPY_3003:ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ\"}\n# CURRENT_REQUEST_GUARD\nAnswer CURRENT_USER_REQUEST_JSON, using the system instructions, memory, and recent context above."
+    },
+    {
+      "name": "large_723_turn_history",
+      "generator": {
+        "kind": "large_history",
+        "turn_pairs": 723,
+        "user_repeat": 1500,
+        "assistant_repeat": 1500,
+        "latest": "LATEST_LARGE_GOLDEN_4004"
+      },
+      "tools": [],
+      "max_chars": 64000,
+      "expected_length": 63932,
+      "expected_sha256": "fe99f0d0619de19b40187b65f345c6b99cee4d482bbd58d05e523062da62ddf4"
+    }
+  ]
+}

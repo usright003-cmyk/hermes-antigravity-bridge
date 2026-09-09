@@ -82,6 +82,23 @@ def parse_model_ids(output: str) -> tuple[str, ...]:
     return tuple(ids)
 
 
+DEFAULT_ANTIGRAVITY_MODELS: tuple[str, ...] = (
+    "gemini-3.8-flash",
+    "gemini-3.8-flash-high",
+    "gemini-3.7-flash",
+    "gemini-3.7-flash-medium",
+    "gemini-3.6-flash",
+    "gemini-3.6-flash-medium",
+    "gemini-3.1-pro",
+    "gemini-3.1-pro-low",
+    "claude-sonnet-4-6",
+    "claude-sonnet-4.6",
+    "claude-opus-4-6",
+    "claude-opus-4.6",
+    "gpt-oss-120b",
+)
+
+
 def is_false_success(result: Mapping[str, Any]) -> bool:
     if result.get("status") != "SUCCESS" or str(result.get("response") or "").strip():
         return False
@@ -192,6 +209,18 @@ class AntigravityBackend:
         ]
         if self.config.sandbox:
             command.append("--sandbox")
+
+        effort: str | None = None
+        base_model = model
+        for suffix in ("-high", "-medium", "-low"):
+            if base_model.endswith(suffix):
+                effort = suffix[1:]
+                base_model = base_model[: -len(suffix)]
+                break
+
+        if effort is None and "gemini" in base_model.lower():
+            effort = "high"
+
         command.extend(
             [
                 "--mode",
@@ -199,9 +228,11 @@ class AntigravityBackend:
                 "--print-timeout",
                 f"{self.config.timeout_seconds}s",
                 "--model",
-                model,
+                base_model,
             ]
         )
+        if effort is not None and "gemini" in base_model.lower():
+            command.extend(["--effort", effort])
         return command
 
     def list_models(self, *, force_refresh: bool = False) -> tuple[str, ...]:
@@ -218,14 +249,14 @@ class AntigravityBackend:
                     env=self._base_environment(),
                     capture_output=True,
                     text=True,
-                    timeout=min(self.config.timeout_seconds, 30),
+                    timeout=min(self.config.timeout_seconds, 3),
                     check=False,
                 )
-            except (OSError, subprocess.TimeoutExpired) as exc:
-                raise BackendUnavailable("Antigravity model discovery failed") from exc
-            models = parse_model_ids(completed.stdout)
-            if completed.returncode != 0 or not models:
-                raise BackendUnavailable("Antigravity model discovery returned no usable models")
+                models = parse_model_ids(completed.stdout) if completed.returncode == 0 else ()
+            except (OSError, subprocess.TimeoutExpired):
+                models = ()
+            if not models:
+                models = DEFAULT_ANTIGRAVITY_MODELS
             self._model_cache = (now, models)
             return models
 
@@ -382,8 +413,10 @@ class AntigravityBackend:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 bufsize=1,
-                start_new_session=True,
+                start_new_session=True if os.name == "posix" else False,
             )
         except OSError as exc:
             raise BackendUnavailable("could not start Antigravity CLI") from exc
@@ -402,6 +435,8 @@ class AntigravityBackend:
         reader.start()
         assert process.stdin is not None
         try:
+            if not prompt.endswith("\n"):
+                prompt += "\n"
             process.stdin.write(prompt)
             process.stdin.close()
         except (BrokenPipeError, OSError):
@@ -480,7 +515,9 @@ class AntigravityBackend:
         runtime = self._ensure_runtime()
         last_error: BackendError | None = None
         for attempt in range(1, self.config.max_attempts + 1):
-            with tempfile.TemporaryDirectory(prefix="request-", dir=runtime) as request_dir:
+            with tempfile.TemporaryDirectory(
+                prefix="request-", dir=runtime, ignore_cleanup_errors=True
+            ) as request_dir:
                 try:
                     result = self._run_attempt(prompt, model, Path(request_dir))
                 except BackendError as exc:
@@ -565,7 +602,9 @@ class AntigravityBackend:
         runtime = self._ensure_runtime()
         last_error: BackendError | None = None
         for attempt in range(1, self.config.max_attempts + 1):
-            with tempfile.TemporaryDirectory(prefix="request-", dir=runtime) as request_dir:
+            with tempfile.TemporaryDirectory(
+                prefix="request-", dir=runtime, ignore_cleanup_errors=True
+            ) as request_dir:
                 try:
                     yield from self._stream_attempt(prompt, model, Path(request_dir))
                     return

@@ -29,9 +29,13 @@ def _parser() -> argparse.ArgumentParser:
         help="TOML configuration path (default: ~/.config/hermes-antigravity-bridge/config.toml)",
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
-    subcommands.add_parser("serve", help="Run the local HTTP bridge")
-    subcommands.add_parser("check", help="Validate configuration, CLI compatibility, and account readiness")
-    subcommands.add_parser("models", help="List available Antigravity model IDs")
+    for name, help_text in (
+        ("serve", "Run the local HTTP bridge"),
+        ("check", "Validate configuration, CLI compatibility, and account readiness"),
+        ("models", "List available Antigravity model IDs"),
+    ):
+        sub = subcommands.add_parser(name, help=help_text)
+        sub.add_argument("--config", default=argparse.SUPPRESS, help="TOML configuration path")
     return parser
 
 

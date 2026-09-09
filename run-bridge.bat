@@ -8,5 +8,5 @@ echo ====================================================================
 echo.
 cd /d "E:\hermes-antigravity-bridge"
 set PYTHONPATH=src
-python -m hermes_antigravity_bridge.cli serve --config "%USERPROFILE%\.config\hermes-antigravity-bridge\config.toml"
+python -m hermes_antigravity_bridge.cli --config "%USERPROFILE%\.config\hermes-antigravity-bridge\config.toml" serve
 pause

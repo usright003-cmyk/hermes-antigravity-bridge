@@ -1,4 +1,4 @@
-﻿"""One-click automatic setup and connection between Hermes Agent and Antigravity Bridge."""
+"""One-click automatic setup and connection between Hermes Agent and Antigravity Bridge."""
 
 from __future__ import annotations
 
@@ -169,7 +169,7 @@ echo ====================================================================
 echo.
 cd /d "{repo_root}"
 set PYTHONPATH=src
-python -m hermes_antigravity_bridge.cli serve --config "%USERPROFILE%\\.config\\hermes-antigravity-bridge\\config.toml"
+python -m hermes_antigravity_bridge.cli --config "%USERPROFILE%\\.config\\hermes-antigravity-bridge\\config.toml" serve
 pause
 """
     batch_file.write_text(content, encoding="utf-8")

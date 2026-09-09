@@ -99,7 +99,7 @@ class AntigravityConfig:
     runtime_dir: Path = field(default_factory=_default_runtime_dir)
     model_cache_ttl_seconds: int = 60
     max_attempts: int = 3
-    validated_versions: tuple[str, ...] = ("1.1.28",)
+    validated_versions: tuple[str, ...] = ("1.1.17", "1.1.28")
     allow_unvalidated_versions: bool = False
 
     @property
@@ -284,7 +284,7 @@ class BridgeConfig:
                 maximum=64,
             ),
         )
-        validated_versions_value = agy_raw.get("validated_versions", ["1.1.28"])
+        validated_versions_value = agy_raw.get("validated_versions", ["1.1.17", "1.1.28"])
         if not isinstance(validated_versions_value, list) or not validated_versions_value:
             raise ConfigurationError("antigravity.validated_versions must be a non-empty array")
         validated_versions = tuple(str(value).strip() for value in validated_versions_value)

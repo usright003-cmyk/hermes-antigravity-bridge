@@ -111,38 +111,57 @@ run-bridge.bat   # on Windows
 
 ## 📱 Android & Termux Support: Pocket Superintelligence
 
-Run Hermes Agent directly on your Android phone using **Termux** while drawing upon the massive 1,000,000-token DeepMind Gemini 3.8 Flash model hosted on your PC, server, or cloud machine!
+Run Hermes Agent directly on your Android phone using **Termux** with **ZERO PC DEPENDENCY**! The entire stack—Hermes Agent, local Antigravity Bridge, and Google's 1,000,000-token DeepMind Gemini 3.8 Flash model—runs self-contained on your mobile device.
 
 <p align="center">
   <img src="assets/mobile-termux-flow.svg" alt="Hermes Agent on Android Termux Architecture" width="880">
 </p>
 
 ### Why Run on Android with Termux?
-* 🔋 **Zero Phone Battery Drain**: Heavy AI inference happens on your PC/server. Your phone stays completely cool and uses almost zero battery.
-* 🛠️ **Native Android Superpowers (`termux-api`)**: Hermes running in Termux can trigger phone vibrations, check battery percentage, read/send SMS, fetch device location, and run Android shell scripts.
-* 💾 **Local SQLite Memory on Device**: Your personal conversations and preferences (`memory.db`) stay securely stored in your phone's Termux storage.
-* 🌐 **Anywhere in the World**: Connect over your local home Wi-Fi or across the globe using [Tailscale](https://tailscale.com/) mesh VPN (no port forwarding required).
+* 🚀 **100% Standalone (No PC Needed)**: Run everywhere—on the street, commute, or travel. Your phone connects directly to Google Cloud without needing an active computer at home.
+* 🔋 **Cool & Battery-Friendly**: While the agent and tools run locally, heavy LLM token generation is computed by Google DeepMind's cloud infrastructure. Your phone doesn't heat up or burn battery on heavy inference.
+* 🛠️ **Native Android Hardware Superpowers (`termux-api`)**: Hermes can trigger device vibrations, check battery health, send SMS, fetch GPS coordinates, access clipboard, and execute shell commands directly on your phone!
+* 💾 **Local Sovereign SQLite Memory**: Your conversations and memory records (`memory.db`) stay stored exclusively on your device.
 
-### 🚀 1-Click Termux Setup (2 Easy Steps)
+---
 
-#### Step 1: On Your PC / Server (Enable LAN/Mobile Mode)
-Double click **`Run-Antigravity-Bridge-LAN.bat`** (or run `run-bridge-lan.bat`).
-> This launches the bridge bound to `0.0.0.0:8765` so devices on your Wi-Fi or Tailscale network can connect securely using your 256-bit Bearer Token.
+### 🚀 Setup Mode 1: 100% Standalone on Mobile (No PC Required!)
 
-#### Step 2: On Your Android Phone (Termux)
-Open the **Termux** app and paste this single command:
+Open the **Termux** app on your Android phone and paste this single command:
+
 ```bash
-pkg update -y && pkg install -y python git curl
-curl -sSL https://raw.githubusercontent.com/usright003-cmyk/hermes-antigravity-bridge/main/setup-termux.sh | bash
-```
-*Enter your PC's IP (e.g. `http://192.168.0.5:8765/v1`) and Token when prompted.*
-
-#### Step 3: Chat with Hermes!
-```bash
-hermes
+pkg update -y && pkg install -y proot-distro git curl
+curl -sSL https://raw.githubusercontent.com/usright003-cmyk/hermes-antigravity-bridge/main/setup-termux.sh | bash -s -- --standalone
 ```
 
-> 💡 **Termux Hardware Integration:** Install the Termux:API app from [F-Droid](https://f-droid.org/packages/com.termux.api/) and run `pkg install termux-api` in Termux. Hermes can then run Android hardware tools autonomously!
+#### What happens next:
+1. The script sets up an isolated PRoot Linux (Ubuntu ARM64) environment on your phone (no root needed).
+2. It installs Google's official Antigravity CLI (`agy`) and the Hermes Bridge.
+3. On first run, it presents a Google sign-in link. Simply tap/copy the link, sign in with your Google account in Chrome on your phone, and enter the authorization code.
+4. It creates a universal launcher: **`start-hermes`**.
+
+#### Daily Usage on Mobile:
+Whenever you want to chat, simply open Termux and type:
+```bash
+start-hermes
+```
+*The bridge launches automatically in the background and Hermes opens right on your screen!*
+
+---
+
+### 🌐 Setup Mode 2: Remote Bridge (Connect to PC / VPS)
+
+If you prefer to keep the bridge running on your home PC or cloud VPS and use Termux as a lightweight client:
+
+1. **On your PC / Server**: Double-click **`Run-Antigravity-Bridge-LAN.bat`** (binds to `0.0.0.0:8765`).
+2. **In Termux on your Phone**:
+   ```bash
+   curl -sSL https://raw.githubusercontent.com/usright003-cmyk/hermes-antigravity-bridge/main/setup-termux.sh | bash
+   ```
+   *Enter your PC's LAN IP (e.g. `http://192.168.0.5:8765/v1`) and token.*
+3. **Chat**: Run `hermes` in Termux.
+
+> 💡 **Termux Hardware Tools:** Install the Termux:API app from [F-Droid](https://f-droid.org/packages/com.termux.api/) and run `pkg install termux-api` in Termux to give Hermes direct access to Android hardware!
 
 ---
 

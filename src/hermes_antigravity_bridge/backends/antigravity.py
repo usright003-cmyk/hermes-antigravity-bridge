@@ -476,7 +476,7 @@ class AntigravityBackend:
             try:
                 res = self._run_attempt(prompt, model, request_dir, on_delta=on_delta)
                 final_result.append(res)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - propagate worker exception to caller
                 worker_error.append(exc)
             finally:
                 delta_queue.put({"type": "done"})

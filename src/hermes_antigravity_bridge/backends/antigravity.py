@@ -461,6 +461,59 @@ class AntigravityBackend:
             )
         raise last_error or BackendError("Antigravity request failed")
 
+    def _stream_attempt(
+        self, prompt: str, model: str, request_dir: Path
+    ) -> Iterator[dict[str, Any]]:
+        delta_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+
+        def on_delta(delta: str) -> None:
+            delta_queue.put({"type": "delta", "content": delta})
+
+        worker_error: list[BaseException] = []
+        final_result: list[dict[str, Any]] = []
+
+        def worker() -> None:
+            try:
+                res = self._run_attempt(prompt, model, request_dir, on_delta=on_delta)
+                final_result.append(res)
+            except BaseException as exc:
+                worker_error.append(exc)
+            finally:
+                delta_queue.put({"type": "done"})
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+
+        while True:
+            item = delta_queue.get()
+            if item["type"] == "done":
+                break
+            yield item
+
+        thread.join()
+        if worker_error:
+            exc = worker_error[0]
+            if isinstance(exc, BackendError):
+                raise exc
+            raise BackendError(str(exc)) from exc
+
+        if final_result:
+            result = final_result[0]
+            usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
+            backend_response = BackendResponse(
+                response=str(result["response"]),
+                model=model,
+                usage=dict(usage),
+                status=str(result.get("status") or "SUCCESS"),
+                duration_seconds=float(result.get("duration_seconds") or 0),
+                conversation_id=(
+                    str(result["conversation_id"])
+                    if result.get("conversation_id") is not None
+                    else None
+                ),
+            )
+            yield {"type": "result", "response": backend_response}
+
     def generate_stream(
         self, prompt: str, model: str
     ) -> Iterator[dict[str, Any]]:
@@ -469,60 +522,14 @@ class AntigravityBackend:
         last_error: BackendError | None = None
         for attempt in range(1, self.config.max_attempts + 1):
             with tempfile.TemporaryDirectory(prefix="request-", dir=runtime) as request_dir:
-                delta_queue: queue.Queue[dict[str, Any]] = queue.Queue()
-
-                def on_delta(delta: str) -> None:
-                    delta_queue.put({"type": "delta", "content": delta})
-
-                worker_error: list[BaseException] = []
-                final_result: list[dict[str, Any]] = []
-
-                def worker() -> None:
-                    try:
-                        res = self._run_attempt(prompt, model, Path(request_dir), on_delta=on_delta)
-                        final_result.append(res)
-                    except BaseException as exc:
-                        worker_error.append(exc)
-                    finally:
-                        delta_queue.put({"type": "done"})
-
-                thread = threading.Thread(target=worker, daemon=True)
-                thread.start()
-
-                streamed_any = False
-                while True:
-                    item = delta_queue.get()
-                    if item["type"] == "done":
-                        break
-                    streamed_any = True
-                    yield item
-
-                thread.join()
-                if worker_error:
-                    exc = worker_error[0]
+                try:
+                    yield from self._stream_attempt(prompt, model, Path(request_dir))
+                    return
+                except BackendError as exc:
+                    last_error = exc
                     transient = any(marker in str(exc).lower() for marker in _TRANSIENT_MARKERS)
-                    if transient and attempt < self.config.max_attempts and not streamed_any:
+                    if transient and attempt < self.config.max_attempts:
                         time.sleep(min(1.5 * attempt, 5.0))
                         continue
-                    if isinstance(exc, BackendError):
-                        raise exc
-                    raise BackendError(str(exc)) from exc
-
-                if final_result:
-                    result = final_result[0]
-                    usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
-                    backend_response = BackendResponse(
-                        response=str(result["response"]),
-                        model=model,
-                        usage=dict(usage),
-                        status=str(result.get("status") or "SUCCESS"),
-                        duration_seconds=float(result.get("duration_seconds") or 0),
-                        conversation_id=(
-                            str(result["conversation_id"])
-                            if result.get("conversation_id") is not None
-                            else None
-                        ),
-                    )
-                    yield {"type": "result", "response": backend_response}
-                    return
+                    raise
         raise last_error or BackendError("Antigravity request failed")

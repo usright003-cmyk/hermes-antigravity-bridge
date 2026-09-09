@@ -31,6 +31,9 @@ def _safe_client_message(error: BridgeError) -> str:
     return " ".join(str(error).split())[:300]
 
 
+_SLOT_ACQUIRE_TIMEOUT_SECONDS: float = 0.05
+
+
 class BridgeHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -49,7 +52,7 @@ class BridgeHTTPServer(ThreadingHTTPServer):
         super().__init__(address, BridgeRequestHandler)
 
     def process_request(self, request: Any, client_address: Any) -> None:
-        if not self.request_slots.acquire(blocking=False):
+        if not self.request_slots.acquire(timeout=_SLOT_ACQUIRE_TIMEOUT_SECONDS):
             body = _json_bytes(
                 {
                     "error": {
@@ -88,10 +91,19 @@ class BridgeHTTPServer(ThreadingHTTPServer):
             raise
 
     def process_request_thread(self, request: Any, client_address: Any) -> None:
+        slot_released = False
         try:
-            super().process_request_thread(request, client_address)
+            try:
+                self.finish_request(request, client_address)
+            finally:
+                self.request_slots.release()
+                slot_released = True
+        except Exception:  # noqa: BLE001 - preserve socketserver error handling
+            self.handle_error(request, client_address)
         finally:
-            self.request_slots.release()
+            if not slot_released:
+                self.request_slots.release()
+            self.shutdown_request(request)
 
 
 class BridgeRequestHandler(BaseHTTPRequestHandler):

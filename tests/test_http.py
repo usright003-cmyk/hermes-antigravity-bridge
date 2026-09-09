@@ -267,6 +267,17 @@ class HTTPContractTests(unittest.TestCase):
             thread.join(timeout=2)
         self.assertEqual(first_result, [200])
 
+    def test_rapid_sequential_requests_do_not_trigger_spurious_concurrency_429(self):
+        # Regression test: rapid back-to-back requests on a max_concurrent_requests=1 server
+        # must not race against worker thread socket cleanup and return spurious 429.
+        statuses = []
+        for _ in range(25):
+            for path in ("/version", "/api/version", "/api/tags", "/health"):
+                status, _, _ = self.request(path, auth=True)
+                statuses.append(status)
+        self.assertEqual(set(statuses), {200})
+        self.assertEqual(len(statuses), 100)
+
 
 if __name__ == "__main__":
     unittest.main()

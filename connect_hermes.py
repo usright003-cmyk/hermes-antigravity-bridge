@@ -20,7 +20,16 @@ if sys.platform == "win32":
 try:
     import yaml
 except ImportError:
-    yaml = None
+    try:
+        import subprocess
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "pyyaml"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        import yaml
+    except Exception:
+        yaml = None
 
 
 def find_hermes_config_path() -> Path | None:
@@ -141,6 +150,12 @@ def update_hermes_config(hermes_config_path: Path, token: str) -> None:
     if not isinstance(providers_list, list):
         providers_list = []
 
+    existing_names = [
+        str(p.get("name"))
+        for p in providers_list
+        if isinstance(p, dict) and p.get("name") and p.get("name") != "antigravity"
+    ]
+
     updated = False
     for i, p in enumerate(providers_list):
         if isinstance(p, dict) and p.get("name") == "antigravity":
@@ -155,6 +170,8 @@ def update_hermes_config(hermes_config_path: Path, token: str) -> None:
     if yaml is not None:
         with hermes_config_path.open("w", encoding="utf-8") as f:
             yaml.safe_dump(cfg, f, default_flow_style=False, sort_keys=False)
+
+    return existing_names
 
 
 def create_launcher_batch(repo_root: Path) -> Path:
@@ -176,6 +193,19 @@ pause
     return batch_file
 
 
+def ensure_antigravity_auth(agy_bin: str) -> None:
+    user_cli = Path.home() / ".gemini" / "antigravity-cli"
+    jetski = user_cli / "jetski_state.pbtxt"
+    if not jetski.exists():
+        print("[*] Antigravity Google authentication not detected on this machine.")
+        print("[*] Launching Google authentication in your browser...")
+        try:
+            import subprocess
+            subprocess.run([agy_bin], check=False)
+        except Exception as e:
+            print(f"[!] Please run '{agy_bin}' in your terminal to complete Google sign-in: {e}")
+
+
 def main() -> int:
     repo_root = Path(__file__).resolve().parent
     print("=" * 65)
@@ -189,8 +219,11 @@ def main() -> int:
 
     if not agy_bin:
         print("[!] Antigravity CLI ('agy') not found on system.")
+        print("[*] Please install Antigravity first so 'agy' is available.")
         return 1
     print(f"[+] Antigravity CLI found: {agy_bin}")
+
+    ensure_antigravity_auth(agy_bin)
 
     config_file, token = setup_bridge()
     print(f"[+] Bridge config created: {config_file}")
@@ -199,11 +232,14 @@ def main() -> int:
 
     hermes_cfg = find_hermes_config_path()
     if hermes_cfg:
-        update_hermes_config(hermes_cfg, token)
+        existing = update_hermes_config(hermes_cfg, token)
         print(f"[+] Hermes Agent configured: {hermes_cfg}")
         print("    Model    : gemini-3.8-flash (1,000,000 Token Context)")
         print("    Provider : custom:antigravity")
         print("    Endpoint : http://127.0.0.1:8765/v1")
+        if existing:
+            print(f"[+] Preserved your existing providers: {', '.join(existing)}")
+            print("    (You can switch between providers anytime in Hermes with /model)")
     else:
         print("[!] Hermes config directory not found.")
 

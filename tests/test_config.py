@@ -1,3 +1,4 @@
+import os
 import stat
 import sys
 import tempfile
@@ -42,6 +43,7 @@ class BridgeConfigTests(unittest.TestCase):
             self.assertTrue(config.antigravity.sandbox)
             self.assertEqual(config.antigravity.mode, "plan")
 
+    @unittest.skipUnless(os.name == "posix", "POSIX file permission mode check")
     def test_rejects_group_readable_token_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             token_file = Path(tmp) / "bridge.token"

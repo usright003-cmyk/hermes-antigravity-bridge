@@ -1,0 +1,17 @@
+﻿services:
+  bridge:
+    build: .
+    container_name: hermes-antigravity-bridge
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - ./config:/config:ro
+      - agy-home:/root/.local/state/hermes-antigravity-bridge/agy-home
+    environment:
+      - AGY_BRIDGE_PORT=8765
+      - AGY_DEFAULT_MODEL=gemini-3.8-flash-high
+    command: ["--config", "/config/config.example.toml", "serve"]
+
+volumes:
+  agy-home:

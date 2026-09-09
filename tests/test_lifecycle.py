@@ -27,6 +27,7 @@ class LifecycleScriptTests(unittest.TestCase):
             )
         return completed
 
+    @unittest.skipUnless(shutil.which("bash"), "bash is required for lifecycle script tests")
     def test_install_update_rollback_and_uninstall_preserve_external_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "home"

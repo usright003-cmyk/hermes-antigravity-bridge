@@ -21,7 +21,10 @@ FAKE_AGY = Path(__file__).parent / "fake_agy.py"
 class AntigravityBackendTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        FAKE_AGY.chmod(FAKE_AGY.stat().st_mode | stat.S_IXUSR)
+        try:
+            FAKE_AGY.chmod(FAKE_AGY.stat().st_mode | stat.S_IXUSR)
+        except OSError:
+            pass
 
     def make_backend(self, runtime: Path, **overrides):
         runtime.mkdir(parents=True, exist_ok=True)

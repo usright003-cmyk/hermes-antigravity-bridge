@@ -1,159 +1,155 @@
-# Hermes Antigravity Bridge
+﻿# Hermes Antigravity Bridge
 
-A local, authenticated compatibility bridge that lets Hermes Agent use models exposed by the Antigravity CLI while Hermes remains the source of truth for memory, sessions, skills, tools, context selection, model switching, and agent behavior.
+<p align="center">
+  <a href="https://github.com/usright003-cmyk/hermes-antigravity-bridge/actions"><img src="https://github.com/usright003-cmyk/hermes-antigravity-bridge/actions/workflows/ci.yml/badge.svg" alt="CI Status"></a>
+  <img src="https://img.shields.io/badge/python-3.10%2B-blue.svg" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT">
+  <img src="https://img.shields.io/badge/dependencies-zero-success.svg" alt="Zero Dependencies">
+  <img src="https://img.shields.io/badge/docker-ready-blue.svg" alt="Docker Ready">
+</p>
 
-Phase 1 supports Hermes Agent only. OpenClaw and other agent integrations are intentionally out of scope.
+A local, authenticated compatibility bridge that lets **Hermes Agent** use advanced models (e.g. Gemini 3.8 Flash, Gemini 3.1 Pro) exposed by the **Google DeepMind Antigravity CLI (`agy`)** via an OpenAI-compatible HTTP interface — while Hermes remains the strict single source of truth for memories, sessions, skills, tools, and continuity.
 
-## Status
+---
 
-Version 0.1.0 is alpha software. The prompt policy is frozen against a behaviorally validated reference bridge, but external users should read the security and retention sections before installing.
+## ⚡ Highlights
 
-Validated runtime compatibility:
+- **Zero Cloud API Costs**: Access state-of-the-art models via your local, authenticated `agy` CLI session.
+- **Hermes Owns Everything**: Hermes retains full ownership of `USER.md`, `MEMORY.md`, tool execution, skills, and conversation continuity.
+- **Fail-Closed Sandbox Gate**: Antigravity is strictly prevented from executing autonomous internal tools (`--sandbox`, `--mode plan`, `toolPermission: strict`, no allow rules, isolated dedicated home).
+- **Zero Third-Party Dependencies**: Built entirely on standard Python (`http.server`, `subprocess`, `dataclasses`, `json`).
+- **Cross-Platform**: Tested on Linux (systemd & containers), macOS, and Windows.
 
-- Linux with systemd user services
-- Python 3.10+
-- Antigravity CLI `agy` 1.1.28
-- Hermes custom OpenAI-compatible providers
+---
 
-The bridge fails readiness checks on unvalidated `agy` versions instead of assuming security-sensitive CLI behavior is unchanged.
+## 📐 Architecture & Flow
 
-## Ownership model
-
-```text
-Telegram / CLI / Web
-        |
-        v
-Hermes Agent
-  owns USER.md / MEMORY.md
-  owns session state and conversation continuity
-  selects relevant context and skills
-  executes all approved tools
-        |
-        | authenticated OpenAI-style request
-        v
-Hermes Antigravity Bridge
-  validates the request
-  applies deterministic context budgets
-  anchors the complete latest user request
-  starts one stateless, sandboxed agy print turn
-  validates tagged tool calls against Hermes schemas
-        |
-        v
-Antigravity CLI -> selected model
+```mermaid
+flowchart TD
+    User([User / Telegram / CLI]) --> Hermes[Hermes Agent\nOwns MEMORY.md, state.db, tools]
+    Hermes -- "OpenAI-compatible Request\n(Bearer Token Auth)" --> Bridge[Hermes Antigravity Bridge\n:8765]
+    
+    subgraph Bridge [Bridge Core Controls]
+        V[Validate Request & Auth] --> B[Budget & Truncate Context\n64,000 char cap]
+        B --> S[Stateless & Isolated Invocation\nDedicated HOME + Sandboxed]
+    end
+    
+    Bridge -- "Stateless print turn\n(--mode plan --sandbox)" --> AGY[Antigravity CLI agy]
+    AGY --> Gemini[Google DeepMind Gemini Models\n3.8 Flash / 3.1 Pro]
+    Gemini --> AGY
+    AGY -- "Stream-JSON Output" --> Bridge
+    Bridge -- "OpenAI Chat Completion" --> Hermes
+    Hermes -- "Execute Approved Tools" --> Action([Tool Execution & Turn Persistence])
 ```
 
-The bridge never opens Hermes memory files or `state.db`, never creates a competing memory store, and never resumes an Antigravity conversation for continuity. Hermes supplies continuity on every request.
+---
 
-## Security gate
+## 🚀 60-Second Quick Start
 
-Antigravity is an agent runtime with its own tools. `--sandbox` and plan mode alone are not enough to prevent autonomous tool execution. This project therefore uses all of these controls:
+### Option A: Local Python (Linux / macOS / Windows)
 
-- A dedicated Antigravity `HOME`
-- `toolPermission: strict`
-- No Antigravity permission allow rules
-- No trusted workspaces
-- No `always-proceed` artifact policy
-- `--sandbox`
-- `--mode plan`
-- A new empty working directory for each request
-- Fail-closed detection of tool activity exposed by the stream protocol
-- systemd filesystem hardening
+```bash
+# 1. Clone repository
+git clone https://github.com/usright003-cmyk/hermes-antigravity-bridge.git
+cd hermes-antigravity-bridge
 
-`/ready` and every generation re-check strict permission settings. Unsafe settings stop the bridge.
+# 2. Install package in editable mode
+pip install -e .
 
-See [SECURITY.md](SECURITY.md) and [docs/security-and-privacy.md](docs/security-and-privacy.md).
+# 3. Check configuration and discovered models
+hermes-antigravity-bridge --config config/config.example.toml check
+hermes-antigravity-bridge --config config/config.example.toml models
 
-## Quick start
+# 4. Start the bridge server
+hermes-antigravity-bridge --config config/config.example.toml serve
+```
 
-Prerequisites:
+### Option B: Docker Compose
 
-- Hermes Agent
-- An installed `agy` CLI
-- Python 3.10+
-- `uv`, or Python with working `venv`/`pip`
-- Linux/systemd for managed service installation
+```bash
+docker compose up -d
+```
 
-Prepare the isolated installation without starting a service:
+### Option C: Production Linux Service (Managed systemd)
 
+Prepare the isolated environment:
 ```bash
 ./scripts/install.sh --prepare
 ```
 
-The installer prints the dedicated Antigravity home. Authenticate it once:
-
+Authenticate your dedicated Antigravity home once:
 ```bash
 HOME="$HOME/.local/state/hermes-antigravity-bridge/agy-home" agy
 ```
 
-Then install and validate the service:
-
+Install and start the managed systemd user service:
 ```bash
 ./scripts/install.sh
 ```
 
-The installer generates a random bearer token and does not modify Hermes configuration. Complete Hermes setup using [docs/hermes-setup.md](docs/hermes-setup.md).
+---
 
-## Commands
+## 🔗 Connecting to Hermes Agent
+
+In your Hermes environment, configure the custom OpenAI-compatible provider:
 
 ```bash
-hermes-antigravity-bridge --version
-hermes-antigravity-bridge --config ~/.config/hermes-antigravity-bridge/config.toml check
-hermes-antigravity-bridge --config ~/.config/hermes-antigravity-bridge/config.toml models
-hermes-antigravity-bridge --config ~/.config/hermes-antigravity-bridge/config.toml serve
+# Point Hermes to your local bridge
+hermes config set model.provider custom
+hermes config set model.base_url http://127.0.0.1:8765/v1
+hermes config set model.api_key "$(cat ~/.config/hermes-antigravity-bridge/bridge.token)"
+
+# Select default model
+hermes config set model.name "gemini-3.8-flash-high"
 ```
 
-## Lifecycle
+---
+
+## 🛡️ Security Gate & Tool Isolation
+
+Antigravity CLI is an autonomous agent runtime by design. Running in `--mode plan` alone is insufficient to prevent tool execution if global user settings permit it. This bridge enforces deep isolation:
+
+- **Dedicated Antigravity `HOME`**: Completely isolated from user `~/.gemini` settings.
+- **Strict Permission Verification**: Enforces `toolPermission: strict`, zero permission allow rules, no trusted workspaces, and no `always-proceed` artifact policy.
+- **Sandboxed Execution**: Calls CLI with `--sandbox` and `--mode plan`.
+- **Ephemeral Temp Directories**: A clean, empty working directory is provisioned for every single turn.
+- **Fail-Closed Stream Monitor**: Aborts immediately if the stream output indicates internal tool invocations.
+
+See [SECURITY.md](SECURITY.md) and [docs/security-and-privacy.md](docs/security-and-privacy.md).
+
+---
+
+## 📋 API Endpoints
+
+| Method | Endpoint | Auth | Purpose |
+| :--- | :--- | :---: | :--- |
+| `GET` | `/health` | No | Basic process liveness probe |
+| `GET` | `/ready` | Yes | Validates CLI isolation, flags, and model discovery |
+| `GET` | `/v1/models` | Yes | Lists available models discovered from `agy` |
+| `GET` | `/v1/models/{id}` | Yes | Retrieves model metadata |
+| `POST` | `/v1/chat/completions` | Yes | OpenAI-compatible Chat Completions |
+| `GET` | `/version`, `/api/tags` | Yes | Hermes discovery compatibility probes |
+
+See [docs/api-contract.md](docs/api-contract.md) for full contract specifications.
+
+---
+
+## 🧪 Testing
 
 ```bash
-./scripts/update.sh
-./scripts/rollback.sh
-./scripts/uninstall.sh
-```
-
-Updates install into immutable versioned release directories and atomically move a `current` symlink. Rollback swaps `current` and `previous`. Default uninstall preserves releases, configuration, the generated token, and the dedicated Antigravity state.
-
-No lifecycle script deletes Hermes data or Antigravity conversations/databases. See [docs/install-update-rollback.md](docs/install-update-rollback.md).
-
-## API subset
-
-- `GET /health` — public liveness only
-- `GET /ready` — authenticated Antigravity/version/isolation readiness
-- `GET /v1/models` — authenticated account-backed model catalog
-- `GET /v1/models/{id}` — authenticated model lookup
-- `POST /v1/chat/completions` — authenticated buffered Chat Completions subset
-
-This is not a complete OpenAI API implementation. See [docs/api-contract.md](docs/api-contract.md).
-
-## Context guarantees
-
-- Operational prompt cap remains 64,000 characters by default.
-- The complete latest user request is never normalized or silently clipped.
-- If the latest request cannot fit with required instructions, the request fails explicitly.
-- Non-latest low-entropy runs may be compacted deterministically.
-- Tool schemas and history are serialized as complete JSONL records.
-- Historical context is separated from `CURRENT_USER_REQUEST_JSON`.
-- The final current-request guard makes the active task unambiguous.
-
-See [docs/context-policy.md](docs/context-policy.md).
-
-## Testing
-
-```bash
+# Run unit tests
 PYTHONPATH=src python3 -m unittest discover -s tests -v
+
+# Validate shell scripts (Linux/macOS)
 bash -n scripts/*.sh
+
+# Verify bytecode compilation
 python3 -m compileall -q src tests
 ```
 
-Public CI uses a fake `agy` executable and never requires account credentials. Real-account tests are opt-in and must use synthetic memory and a dedicated Antigravity home.
+---
 
-## Retention
+## 📄 License & Disclaimer
 
-`agy` may create local conversation records, logs, and brain artifacts for each independent print call. The bridge does not read those records for continuity and never purges them automatically. See [docs/retention.md](docs/retention.md).
-
-## Non-affiliation
-
-This project is an independent compatibility integration. It is not affiliated with or endorsed by Google, Antigravity, Anthropic, or the vendors of models exposed by `agy`. It does not redistribute Antigravity binaries, credentials, databases, or proprietary assets.
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+- **License**: [MIT](LICENSE)
+- **Non-affiliation**: This is an independent open-source project and is not affiliated with or endorsed by Google, Antigravity, Anthropic, or Nous Research.

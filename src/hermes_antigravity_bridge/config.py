@@ -58,7 +58,7 @@ def _read_token_file(path_value: str) -> str:
         raise ConfigurationError(f"bearer token file is not readable: {path}") from exc
     if not stat.S_ISREG(file_stat.st_mode):
         raise ConfigurationError("bearer token file must be a regular file")
-    if file_stat.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+    if os.name == "posix" and file_stat.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
         raise ConfigurationError("bearer token file must use 0600 permissions")
     try:
         token = path.read_text(encoding="utf-8").strip()
@@ -78,6 +78,11 @@ class ServerConfig:
     max_concurrent_requests: int = 4
 
 
+def _default_runtime_dir() -> Path:
+    uid = os.getuid() if hasattr(os, "getuid") else os.getpid()
+    return Path(tempfile.gettempdir()) / f"hermes-antigravity-bridge-{uid}"
+
+
 @dataclass(frozen=True)
 class AntigravityConfig:
     binary: Path
@@ -91,13 +96,11 @@ class AntigravityConfig:
             "~/.local/state/hermes-antigravity-bridge/agy-home"
         ).expanduser()
     )
-    runtime_dir: Path = field(
-        default_factory=lambda: Path(tempfile.gettempdir())
-        / f"hermes-antigravity-bridge-{os.getuid()}"
-    )
+    runtime_dir: Path = field(default_factory=_default_runtime_dir)
     model_cache_ttl_seconds: int = 60
     max_attempts: int = 3
     validated_versions: tuple[str, ...] = ("1.1.28",)
+    allow_unvalidated_versions: bool = False
 
     @property
     def settings_file(self) -> Path:
@@ -240,7 +243,7 @@ class BridgeConfig:
 
         runtime_dir = Path(
             str(env.get("AGY_RUNTIME_DIR", agy_raw.get("runtime_dir", ""))).strip()
-            or Path(tempfile.gettempdir()) / f"hermes-antigravity-bridge-{os.getuid()}"
+            or _default_runtime_dir()
         ).expanduser()
 
         server = ServerConfig(
@@ -279,6 +282,10 @@ class BridgeConfig:
         validated_versions = tuple(str(value).strip() for value in validated_versions_value)
         if any(not value for value in validated_versions):
             raise ConfigurationError("antigravity.validated_versions contains an empty version")
+        allow_unvalidated_versions = _as_bool(
+            env.get("AGY_ALLOW_UNVALIDATED_VERSIONS", agy_raw.get("allow_unvalidated_versions", False)),
+            name="antigravity.allow_unvalidated_versions",
+        )
 
         antigravity = AntigravityConfig(
             binary=binary,
@@ -319,6 +326,7 @@ class BridgeConfig:
                 maximum=5,
             ),
             validated_versions=validated_versions,
+            allow_unvalidated_versions=allow_unvalidated_versions,
         )
         if not antigravity.default_model:
             raise ConfigurationError("antigravity.default_model must not be empty")

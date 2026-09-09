@@ -8,6 +8,7 @@ import os
 import queue
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -175,9 +176,14 @@ class AntigravityBackend:
         if self.config.enforce_tool_isolation:
             self.verify_tool_isolation_settings(self.config.settings_file)
 
+    def _binary_command_prefix(self) -> list[str]:
+        binary_str = str(self.config.binary)
+        if binary_str.lower().endswith(".py"):
+            return [sys.executable, binary_str]
+        return [binary_str]
+
     def build_command(self, model: str) -> list[str]:
-        command = [
-            str(self.config.binary),
+        command = self._binary_command_prefix() + [
             "--input-format",
             "text",
             "--output-format",
@@ -207,7 +213,7 @@ class AntigravityBackend:
             runtime = self._ensure_runtime()
             try:
                 completed = subprocess.run(
-                    [str(self.config.binary), "models"],
+                    self._binary_command_prefix() + ["models"],
                     cwd=runtime,
                     env=self._base_environment(),
                     capture_output=True,
@@ -241,7 +247,7 @@ class AntigravityBackend:
         runtime = self._ensure_runtime()
         try:
             help_result = subprocess.run(
-                [str(self.config.binary), "--help"],
+                self._binary_command_prefix() + ["--help"],
                 cwd=runtime,
                 env=self._base_environment(),
                 capture_output=True,
@@ -250,7 +256,7 @@ class AntigravityBackend:
                 check=False,
             )
             version_result = subprocess.run(
-                [str(self.config.binary), "--version"],
+                self._binary_command_prefix() + ["--version"],
                 cwd=runtime,
                 env=self._base_environment(),
                 capture_output=True,
@@ -271,10 +277,17 @@ class AntigravityBackend:
         if version_result.returncode != 0:
             raise BackendUnavailable("Antigravity --version failed")
         version = version_result.stdout.strip().splitlines()[0] if version_result.stdout.strip() else ""
-        if version not in self.config.validated_versions:
-            raise BackendProtocolError(
-                f"Antigravity CLI version {version or 'unknown'} is not validated; "
-                f"supported versions: {', '.join(self.config.validated_versions)}"
+        if "*" not in self.config.validated_versions and version not in self.config.validated_versions:
+            if not self.config.allow_unvalidated_versions:
+                raise BackendProtocolError(
+                    f"Antigravity CLI version {version or 'unknown'} is not validated; "
+                    f"supported versions: {', '.join(self.config.validated_versions)}. "
+                    "Set antigravity.allow_unvalidated_versions = true in config to bypass."
+                )
+            _LOG.warning(
+                "Antigravity CLI version %s is unvalidated (validated: %s); proceeding because allow_unvalidated_versions=True",
+                version,
+                self.config.validated_versions,
             )
         models = self.list_models(force_refresh=True)
         return {

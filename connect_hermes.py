@@ -184,13 +184,46 @@ echo   1,000,000 Token Native Context ^| Gemini 3.8 Flash (High)
 echo   Listening at: http://127.0.0.1:8765
 echo ====================================================================
 echo.
-cd /d "{repo_root}"
+cd /d "%~dp0"
 set PYTHONPATH=src
 python -m hermes_antigravity_bridge.cli --config "%USERPROFILE%\\.config\\hermes-antigravity-bridge\\config.toml" serve
 pause
 """
     batch_file.write_text(content, encoding="utf-8")
     return batch_file
+
+
+def create_lan_launcher_batch(repo_root: Path) -> Path:
+    batch_file = repo_root / "run-bridge-lan.bat"
+    content = f"""@echo off
+title Hermes-Antigravity Bridge (LAN / Mobile Mode - Port 8765)
+echo ====================================================================
+echo   HERMES - ANTIGRAVITY BRIDGE (LAN & MOBILE TERMUX MODE)
+echo   1,000,000 Token Native Context ^| Multi-Device Network Mode
+echo   Listening at: http://0.0.0.0:8765
+echo ====================================================================
+echo.
+cd /d "%~dp0"
+set PYTHONPATH=src
+set AGY_BRIDGE_HOST=0.0.0.0
+set AGY_BRIDGE_ALLOW_REMOTE=true
+python -m hermes_antigravity_bridge.cli --config "%USERPROFILE%\\.config\\hermes-antigravity-bridge\\config.toml" serve
+pause
+"""
+    batch_file.write_text(content, encoding="utf-8")
+    return batch_file
+
+
+def get_lan_ip() -> str:
+    try:
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
 
 
 def ensure_antigravity_auth(agy_bin: str) -> None:
@@ -244,14 +277,24 @@ def main() -> int:
         print("[!] Hermes config directory not found.")
 
     batch_path = create_launcher_batch(repo_root)
-    print(f"[+] Launcher created: {batch_path}")
+    lan_batch_path = create_lan_launcher_batch(repo_root)
+    lan_ip = get_lan_ip()
+    print(f"[+] PC Launcher created: {batch_path}")
+    print(f"[+] LAN/Mobile Launcher created: {lan_batch_path}")
 
     print("=" * 65)
     print("SUCCESS! Hermes Agent is now fully connected to Antigravity!")
     print("=" * 65)
     print("\nHow to run:")
-    print(f"  1. Double click '{batch_path.name}' to start the bridge.")
-    print("  2. Open any terminal and run 'hermes'. Enjoy!\n")
+    print(f"  1. Double click '{batch_path.name}' to start the bridge on this PC.")
+    print("  2. Open any terminal and run 'hermes'. Enjoy!")
+    if lan_ip != "127.0.0.1":
+        print("\n" + "-" * 65)
+        print("📱 Android / Termux Quick Connect:")
+        print(f"  1. Double click '{lan_batch_path.name}' to allow phone connections.")
+        print(f"  2. In Termux on your Android phone (same Wi-Fi), run:")
+        print(f"     curl -sSL https://raw.githubusercontent.com/usright003-cmyk/hermes-antigravity-bridge/main/setup-termux.sh | bash -s -- --endpoint http://{lan_ip}:8765/v1 --token {token}")
+        print("-" * 65 + "\n")
     return 0
 
 

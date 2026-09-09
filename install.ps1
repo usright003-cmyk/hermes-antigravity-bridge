@@ -1,4 +1,4 @@
-﻿# Hermes-Antigravity Bridge: 1-Click Automated Setup for Windows
+# Hermes-Antigravity Bridge: 1-Click Automated Setup for Windows
 $ErrorActionPreference = "Stop"
 
 Write-Host "==========================================================" -ForegroundColor Cyan
@@ -20,19 +20,23 @@ if (-not (Test-Path $InstallDir)) {
 cd $InstallDir
 python connect_hermes.py
 
-# Create Desktop Shortcut
+# Create Desktop Shortcuts
 $Desktop = [Environment]::GetFolderPath("Desktop")
 if (Test-Path $Desktop) {
     Copy-Item "$InstallDir\run-bridge.bat" "$Desktop\Run-Antigravity-Bridge.bat" -Force
+    Copy-Item "$InstallDir\run-bridge-lan.bat" "$Desktop\Run-Antigravity-Bridge-LAN.bat" -Force
     Write-Host "[+] Desktop launcher created: $Desktop\Run-Antigravity-Bridge.bat" -ForegroundColor Green
+    Write-Host "[+] Desktop LAN/Mobile launcher created: $Desktop\Run-Antigravity-Bridge-LAN.bat" -ForegroundColor Green
 }
 
 # Create Global commands in user profile
 Copy-Item "$InstallDir\connect_hermes.py" "$HOME\connect_hermes.py" -Force
 Copy-Item "$InstallDir\run-bridge.bat" "$HOME\run-bridge.bat" -Force
+Copy-Item "$InstallDir\run-bridge-lan.bat" "$HOME\run-bridge-lan.bat" -Force
 
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host " Setup Complete! You can now run:" -ForegroundColor Green
 Write-Host " 1. Double click 'Run-Antigravity-Bridge.bat' on your Desktop" -ForegroundColor White
-Write-Host " 2. Type 'hermes' in any terminal to start chatting!" -ForegroundColor White
+Write-Host " 2. (Optional) Run 'Run-Antigravity-Bridge-LAN.bat' to connect from Android/Termux" -ForegroundColor White
+Write-Host " 3. Type 'hermes' in any terminal to start chatting!" -ForegroundColor White
 Write-Host "==========================================================" -ForegroundColor Cyan

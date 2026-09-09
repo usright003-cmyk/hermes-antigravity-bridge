@@ -5,7 +5,7 @@
   <a href="https://github.com/usright003-cmyk/hermes-antigravity-bridge/actions"><img src="https://img.shields.io/github/actions/workflow/status/usright003-cmyk/hermes-antigravity-bridge/ci.yml?branch=main&label=CI&style=flat-square" alt="CI Status"></a>
   <img src="https://img.shields.io/badge/context-1%2C000%2C000%20Tokens-8A2BE2?style=flat-square" alt="1M Context Window">
   <img src="https://img.shields.io/badge/python-3.10%2B-3776AB?style=flat-square" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=flat-square" alt="Multiplatform">
+  <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows%20%7C%20Android-lightgrey?style=flat-square" alt="Multiplatform">
   <img src="https://img.shields.io/badge/dependencies-zero-success?style=flat-square" alt="Zero Dependencies">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License: MIT"></a>
 </p>
@@ -36,7 +36,7 @@
 * 🔄 **Multi-Provider Coexistence**: Preserves existing providers (OpenAI, Anthropic, Groq, Ollama) in your Hermes configuration—switch anytime with `/model`!
 * 📦 **Zero External Dependencies**: Pure Python standard library (`http.server`, `subprocess`, `dataclasses`, `json`). Lightweight, auditable, and zero dependency drift.
 * 📊 **Embedded Observability Dashboard**: Built-in glassmorphic web interface (`http://localhost:8765/dashboard`) and `/api/metrics` with zero external CDNs or frameworks.
-* 🌍 **Cross-Platform**: Verified and tested across Linux, macOS, and Windows.
+* 🌍 **Cross-Platform**: Verified and tested across Linux, macOS, Windows, and Android (Termux).
 
 ---
 
@@ -106,6 +106,43 @@ python connect_hermes.py
 run-bridge.bat   # on Windows
 # or: python -m hermes_antigravity_bridge.cli serve
 ```
+
+---
+
+## 📱 Android & Termux Support: Pocket Superintelligence
+
+Run Hermes Agent directly on your Android phone using **Termux** while drawing upon the massive 1,000,000-token DeepMind Gemini 3.8 Flash model hosted on your PC, server, or cloud machine!
+
+<p align="center">
+  <img src="assets/mobile-termux-flow.svg" alt="Hermes Agent on Android Termux Architecture" width="880">
+</p>
+
+### Why Run on Android with Termux?
+* 🔋 **Zero Phone Battery Drain**: Heavy AI inference happens on your PC/server. Your phone stays completely cool and uses almost zero battery.
+* 🛠️ **Native Android Superpowers (`termux-api`)**: Hermes running in Termux can trigger phone vibrations, check battery percentage, read/send SMS, fetch device location, and run Android shell scripts.
+* 💾 **Local SQLite Memory on Device**: Your personal conversations and preferences (`memory.db`) stay securely stored in your phone's Termux storage.
+* 🌐 **Anywhere in the World**: Connect over your local home Wi-Fi or across the globe using [Tailscale](https://tailscale.com/) mesh VPN (no port forwarding required).
+
+### 🚀 1-Click Termux Setup (2 Easy Steps)
+
+#### Step 1: On Your PC / Server (Enable LAN/Mobile Mode)
+Double click **`Run-Antigravity-Bridge-LAN.bat`** (or run `run-bridge-lan.bat`).
+> This launches the bridge bound to `0.0.0.0:8765` so devices on your Wi-Fi or Tailscale network can connect securely using your 256-bit Bearer Token.
+
+#### Step 2: On Your Android Phone (Termux)
+Open the **Termux** app and paste this single command:
+```bash
+pkg update -y && pkg install -y python git curl
+curl -sSL https://raw.githubusercontent.com/usright003-cmyk/hermes-antigravity-bridge/main/setup-termux.sh | bash
+```
+*Enter your PC's IP (e.g. `http://192.168.0.5:8765/v1`) and Token when prompted.*
+
+#### Step 3: Chat with Hermes!
+```bash
+hermes
+```
+
+> 💡 **Termux Hardware Integration:** Install the Termux:API app from [F-Droid](https://f-droid.org/packages/com.termux.api/) and run `pkg install termux-api` in Termux. Hermes can then run Android hardware tools autonomously!
 
 ---
 

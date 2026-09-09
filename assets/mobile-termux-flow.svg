@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 480" width="920" height="480">
+  <defs>
+    <style>
+      .bg { fill: #0d1117; stroke: #30363d; stroke-width: 1.5; rx: 12; ry: 12; }
+      .header-bar { fill: #161b22; rx: 12; ry: 12; }
+      .title { fill: #f0f6fc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 15px; font-weight: 600; text-anchor: middle; }
+      .subtitle { fill: #8b949e; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 11px; text-anchor: middle; }
+      .box { fill: #161b22; stroke: #30363d; stroke-width: 1.5; rx: 8; ry: 8; }
+      .box-android { fill: #161b22; stroke: #3fb950; stroke-width: 2; rx: 8; ry: 8; }
+      .box-network { fill: #161b22; stroke: #58a6ff; stroke-width: 2; rx: 8; ry: 8; }
+      .box-pc { fill: #161b22; stroke: #bc8cff; stroke-width: 2; rx: 8; ry: 8; }
+      .box-title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 13px; font-weight: 700; }
+      .box-desc { font-family: "SF Mono", "Segoe UI Mono", Menlo, monospace; font-size: 11px; fill: #8b949e; }
+      .tag { font-family: "SF Mono", "Segoe UI Mono", Menlo, monospace; font-size: 10px; font-weight: 600; }
+      .arrow { stroke: #58a6ff; stroke-width: 2; stroke-linecap: round; }
+      .arrow-green { stroke: #3fb950; stroke-width: 2; stroke-linecap: round; }
+      .arrow-purple { stroke: #bc8cff; stroke-width: 2; stroke-linecap: round; }
+      .dot-red { fill: #ff5f56; }
+      .dot-yellow { fill: #ffbd2e; }
+      .dot-green { fill: #27c93f; }
+    </style>
+    <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#58a6ff" />
+    </marker>
+    <marker id="arrowhead-green" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3fb950" />
+    </marker>
+    <marker id="arrowhead-purple" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#bc8cff" />
+    </marker>
+  </defs>
+
+  <!-- Canvas Background -->
+  <rect width="920" height="480" class="bg" />
+  
+  <!-- Header Bar -->
+  <rect width="920" height="44" class="header-bar" />
+  <circle cx="22" cy="22" r="6" class="dot-red" />
+  <circle cx="42" cy="22" r="6" class="dot-yellow" />
+  <circle cx="62" cy="22" r="6" class="dot-green" />
+  <text x="460" y="24" class="title">📱 Hermes Agent on Android (Termux) + Antigravity Bridge</text>
+  <text x="460" y="38" class="subtitle">Pocket Superintelligence &#8226; Termux Native Shell &amp; Android API &#8226; Zero Phone Battery Drain</text>
+
+  <!-- Node 1: Android Termux -->
+  <rect x="30" y="65" width="255" height="175" class="box-android" />
+  <text x="45" y="90" class="box-title" fill="#3fb950">📱 Android Phone (Termux)</text>
+  <text x="45" y="110" class="box-desc">&#8226; Hermes Agent CLI (Python 3)</text>
+  <text x="45" y="130" class="box-desc">&#8226; Local memory.db (SQLite on Phone)</text>
+  <text x="45" y="150" class="box-desc">&#8226; termux-api (SMS / Battery / Alerts)</text>
+  <text x="45" y="170" class="box-desc">&#8226; Native Android Shell Automation</text>
+  <text x="45" y="190" class="box-desc">&#8226; Zero GPU/RAM strain on device</text>
+  <rect x="45" y="205" width="145" height="20" rx="4" fill="#238636" />
+  <text x="52" y="219" class="tag" fill="#ffffff">Mobile Hermes Client</text>
+
+  <!-- Arrow 1 -> 2 -->
+  <line x1="285" y1="145" x2="335" y2="145" class="arrow" marker-end="url(#arrowhead)" />
+  <text x="290" y="135" class="tag" fill="#58a6ff">HTTP /v1</text>
+
+  <!-- Node 2: Network / Bridge Transport -->
+  <rect x="345" y="65" width="250" height="175" class="box-network" />
+  <text x="360" y="90" class="box-title" fill="#58a6ff">🌐 Network Connection</text>
+  <text x="360" y="110" class="box-desc">&#8226; Home Wi-Fi: 192.168.x.x:8765</text>
+  <text x="360" y="130" class="box-desc">&#8226; Tailscale Mesh (Global 4G/5G)</text>
+  <text x="360" y="150" class="box-desc">&#8226; SSH Reverse Tunnel / Cloudflare</text>
+  <text x="360" y="170" class="box-desc">&#8226; 256-bit Bearer Token Auth</text>
+  <text x="360" y="190" class="box-desc">&#8226; Streaming SSE Responses</text>
+  <rect x="360" y="205" width="145" height="20" rx="4" fill="#1f6feb" />
+  <text x="368" y="219" class="tag" fill="#ffffff">Encrypted Transport</text>
+
+  <!-- Arrow 2 -> 3 -->
+  <line x1="595" y1="145" x2="645" y2="145" class="arrow-purple" marker-end="url(#arrowhead-purple)" />
+  <text x="600" y="135" class="tag" fill="#bc8cff">IPC Pipe</text>
+
+  <!-- Node 3: PC / Server Daemon -->
+  <rect x="655" y="65" width="235" height="175" class="box-pc" />
+  <text x="670" y="90" class="box-title" fill="#bc8cff">💻 Host PC / Server</text>
+  <text x="670" y="110" class="box-desc">&#8226; hermes-antigravity-bridge</text>
+  <text x="670" y="130" class="box-desc">&#8226; Binding 0.0.0.0:8765</text>
+  <text x="670" y="150" class="box-desc">&#8226; Google Antigravity (agy)</text>
+  <text x="670" y="170" class="box-desc">&#8226; Gemini 3.8 Flash (High Think)</text>
+  <text x="670" y="190" class="box-desc">&#8226; 1,000,000 Token Context</text>
+  <rect x="670" y="205" width="150" height="20" rx="4" fill="#8957e5" />
+  <text x="677" y="219" class="tag" fill="#ffffff">Cloud Reasoning Core</text>
+
+  <!-- Bottom Flow: The Round-Trip Superintelligence Stream -->
+  <rect x="30" y="260" width="860" height="195" class="box" />
+  <text x="45" y="288" class="box-title" fill="#e3b341">⚡ Mobile Step-by-Step Execution: How Your Phone Commands DeepMind</text>
+
+  <!-- Step 1 -->
+  <rect x="45" y="305" width="180" height="130" rx="6" fill="#21262d" stroke="#30363d" />
+  <text x="55" y="326" class="tag" fill="#3fb950">1. INPUT ON PHONE</text>
+  <text x="55" y="348" class="box-desc">Type in Termux terminal:</text>
+  <text x="55" y="368" class="box-desc">&gt; hermes</text>
+  <text x="55" y="388" class="box-desc">&#8226; "Check battery level"</text>
+  <text x="55" y="408" class="box-desc">&#8226; "Analyze project repo"</text>
+
+  <!-- Arrow -->
+  <line x1="230" y1="370" x2="260" y2="370" class="arrow-green" marker-end="url(#arrowhead-green)" />
+
+  <!-- Step 2 -->
+  <rect x="265" y="305" width="180" height="130" rx="6" fill="#21262d" stroke="#30363d" />
+  <text x="275" y="326" class="tag" fill="#58a6ff">2. HERMES PACKS PAYLOAD</text>
+  <text x="275" y="348" class="box-desc">Hermes pulls SQLite memory,</text>
+  <text x="275" y="368" class="box-desc">applies your user profile,</text>
+  <text x="275" y="388" class="box-desc">attaches termux-api tools,</text>
+  <text x="275" y="408" class="box-desc">sends request to PC bridge.</text>
+
+  <!-- Arrow -->
+  <line x1="450" y1="370" x2="480" y2="370" class="arrow" marker-end="url(#arrowhead)" />
+
+  <!-- Step 3 -->
+  <rect x="485" y="305" width="180" height="130" rx="6" fill="#21262d" stroke="#30363d" />
+  <text x="495" y="326" class="tag" fill="#bc8cff">3. DEEPMIND REASONING</text>
+  <text x="495" y="348" class="box-desc">PC executes Antigravity CLI.</text>
+  <text x="495" y="368" class="box-desc">Gemini 3.8 1M context</text>
+  <text x="495" y="388" class="box-desc">performs deep reasoning</text>
+  <text x="495" y="408" class="box-desc">with zero token exhaustion.</text>
+
+  <!-- Arrow -->
+  <line x1="670" y1="370" x2="700" y2="370" class="arrow-purple" marker-end="url(#arrowhead-purple)" />
+
+  <!-- Step 4 -->
+  <rect x="705" y="305" width="170" height="130" rx="6" fill="#21262d" stroke="#30363d" />
+  <text x="715" y="326" class="tag" fill="#3fb950">4. STREAMED TO SCREEN</text>
+  <text x="715" y="348" class="box-desc">Real-time typewriter stream</text>
+  <text x="715" y="368" class="box-desc">flows right into Termux.</text>
+  <text x="715" y="388" class="box-desc">Hermes runs Android tools</text>
+  <text x="715" y="408" class="box-desc">and updates phone DB.</text>
+</svg>

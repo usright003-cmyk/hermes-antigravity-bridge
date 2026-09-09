@@ -1,6 +1,7 @@
 # Hermes Antigravity Bridge
 
 <p align="center">
+  <a href="https://pypi.org/project/hermes-antigravity-bridge/"><img src="https://img.shields.io/pypi/v/hermes-antigravity-bridge.svg?color=blue" alt="PyPI Version"></a>
   <a href="https://github.com/usright003-cmyk/hermes-antigravity-bridge/actions"><img src="https://github.com/usright003-cmyk/hermes-antigravity-bridge/actions/workflows/ci.yml/badge.svg" alt="CI Status"></a>
   <img src="https://img.shields.io/badge/python-3.10%2B-blue.svg" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT">
@@ -45,7 +46,21 @@ flowchart TD
 
 ## 🚀 60-Second Quick Start
 
-### Option A: Local Python (Linux / macOS / Windows)
+### Option A: Install via pip (Recommended)
+
+```bash
+# 1. Install globally or in your virtual environment
+pip install hermes-antigravity-bridge
+
+# 2. Check installation and discovered models
+hermes-antigravity-bridge check
+hermes-antigravity-bridge models
+
+# 3. Start the bridge server
+hermes-antigravity-bridge serve
+```
+
+### Option B: Local Python from Source (Linux / macOS / Windows)
 
 ```bash
 # 1. Clone repository

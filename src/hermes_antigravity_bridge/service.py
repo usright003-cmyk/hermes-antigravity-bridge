@@ -132,10 +132,10 @@ class ChatCompletionService:
             raise InvalidRequest("model must be a non-empty string")
         messages = self._validate_messages(body.get("messages"))
         tools = self._validate_tools(body.get("tools"))
-        return requested.strip(), messages, tools
+        return requested.strip(), messages, tools, reasoning_effort
 
     def complete(self, body: Any) -> ChatCompletionResult:
-        requested, messages, tools = self.validate_request(body)
+        requested, messages, tools, reasoning_effort = self.validate_request(body)
         actual_model = self.backend.resolve_model(requested)
         max_chars = self.prompt_budget.effective_chars(
             actual_model,
@@ -147,13 +147,20 @@ class ChatCompletionService:
             max_chars=max_chars,
         )
         _LOG.info(
-            "context model=%s messages=%d prompt_chars=%d limit=%d",
+            "context model=%s effort=%s messages=%d prompt_chars=%d limit=%d",
             actual_model,
+            reasoning_effort,
             len(messages),
             len(prompt),
             max_chars,
         )
-        backend_result = self.backend.generate(prompt, actual_model)
+        kwargs = {}
+        if reasoning_effort is not None:
+            kwargs["effort"] = reasoning_effort
+        try:
+            backend_result = self.backend.generate(prompt, actual_model, **kwargs)
+        except TypeError:
+            backend_result = self.backend.generate(prompt, actual_model)
         allowed_names = {
             str(tool["function"]["name"])
             for tool in tools
@@ -180,7 +187,7 @@ class ChatCompletionService:
         )
 
     def complete_stream(self, body: Any) -> Iterator[dict[str, Any]]:
-        requested, messages, tools = self.validate_request(body)
+        requested, messages, tools, reasoning_effort = self.validate_request(body)
         actual_model = self.backend.resolve_model(requested)
         max_chars = self.prompt_budget.effective_chars(
             actual_model,
@@ -192,8 +199,9 @@ class ChatCompletionService:
             max_chars=max_chars,
         )
         _LOG.info(
-            "context stream model=%s messages=%d prompt_chars=%d limit=%d",
+            "context stream model=%s effort=%s messages=%d prompt_chars=%d limit=%d",
             actual_model,
+            reasoning_effort,
             len(messages),
             len(prompt),
             max_chars,
@@ -205,7 +213,13 @@ class ChatCompletionService:
         }
 
         if hasattr(self.backend, "generate_stream"):
-            stream_gen = self.backend.generate_stream(prompt, actual_model)
+            kwargs = {}
+            if reasoning_effort is not None:
+                kwargs["effort"] = reasoning_effort
+            try:
+                stream_gen = self.backend.generate_stream(prompt, actual_model, **kwargs)
+            except TypeError:
+                stream_gen = self.backend.generate_stream(prompt, actual_model)
             accumulated_text = ""
             has_tool_call_start = False
             for event in stream_gen:

@@ -84,13 +84,21 @@ def parse_model_ids(output: str) -> tuple[str, ...]:
 
 DEFAULT_ANTIGRAVITY_MODELS: tuple[str, ...] = (
     "gemini-3.8-flash",
+    "gemini-3.8-flash-low",
+    "gemini-3.8-flash-medium",
     "gemini-3.8-flash-high",
     "gemini-3.7-flash",
+    "gemini-3.7-flash-low",
     "gemini-3.7-flash-medium",
+    "gemini-3.7-flash-high",
     "gemini-3.6-flash",
+    "gemini-3.6-flash-low",
     "gemini-3.6-flash-medium",
+    "gemini-3.6-flash-high",
     "gemini-3.1-pro",
     "gemini-3.1-pro-low",
+    "gemini-3.1-pro-medium",
+    "gemini-3.1-pro-high",
     "claude-sonnet-4-6",
     "claude-sonnet-4.6",
     "claude-opus-4-6",
@@ -199,7 +207,7 @@ class AntigravityBackend:
             return [sys.executable, binary_str]
         return [binary_str]
 
-    def build_command(self, model: str) -> list[str]:
+    def build_command(self, model: str, effort: str | None = None) -> list[str]:
         command = self._binary_command_prefix() + [
             "--input-format",
             "text",
@@ -210,16 +218,25 @@ class AntigravityBackend:
         if self.config.sandbox:
             command.append("--sandbox")
 
-        effort: str | None = None
+        selected_effort: str | None = effort
         base_model = model
         for suffix in ("-high", "-medium", "-low"):
             if base_model.endswith(suffix):
-                effort = suffix[1:]
+                selected_effort = suffix[1:]
                 base_model = base_model[: -len(suffix)]
                 break
 
-        if effort is None and "gemini" in base_model.lower():
-            effort = "high"
+        if selected_effort is not None:
+            selected_effort = selected_effort.lower().strip()
+            if selected_effort in ("minimal", "none"):
+                selected_effort = "low"
+            elif selected_effort in ("xhigh", "max", "ultra"):
+                selected_effort = "high"
+            elif selected_effort not in ("low", "medium", "high"):
+                selected_effort = "medium"
+
+        if selected_effort is None and "gemini" in base_model.lower():
+            selected_effort = "medium"
 
         command.extend(
             [
@@ -231,8 +248,8 @@ class AntigravityBackend:
                 base_model,
             ]
         )
-        if effort is not None and "gemini" in base_model.lower():
-            command.extend(["--effort", effort])
+        if selected_effort is not None and "gemini" in base_model.lower():
+            command.extend(["--effort", selected_effort])
         return command
 
     def list_models(self, *, force_refresh: bool = False) -> tuple[str, ...]:
@@ -402,8 +419,9 @@ class AntigravityBackend:
         model: str,
         cwd: Path,
         on_delta: Callable[[str], None] | None = None,
+        effort: str | None = None,
     ) -> dict[str, Any]:
-        command = self.build_command(model)
+        command = self.build_command(model, effort=effort)
         try:
             process = subprocess.Popen(
                 command,
@@ -510,7 +528,7 @@ class AntigravityBackend:
         result["response"] = response
         return result
 
-    def generate(self, prompt: str, model: str) -> BackendResponse:
+    def generate(self, prompt: str, model: str, effort: str | None = None) -> BackendResponse:
         self._verify_if_required()
         runtime = self._ensure_runtime()
         last_error: BackendError | None = None
@@ -519,7 +537,7 @@ class AntigravityBackend:
                 prefix="request-", dir=runtime, ignore_cleanup_errors=True
             ) as request_dir:
                 try:
-                    result = self._run_attempt(prompt, model, Path(request_dir))
+                    result = self._run_attempt(prompt, model, Path(request_dir), effort=effort)
                 except BackendError as exc:
                     last_error = exc
                     transient = any(marker in str(exc).lower() for marker in _TRANSIENT_MARKERS)
@@ -543,7 +561,7 @@ class AntigravityBackend:
         raise last_error or BackendError("Antigravity request failed")
 
     def _stream_attempt(
-        self, prompt: str, model: str, request_dir: Path
+        self, prompt: str, model: str, request_dir: Path, effort: str | None = None
     ) -> Iterator[dict[str, Any]]:
         delta_queue: queue.Queue[dict[str, Any]] = queue.Queue()
 
@@ -555,7 +573,7 @@ class AntigravityBackend:
 
         def worker() -> None:
             try:
-                res = self._run_attempt(prompt, model, request_dir, on_delta=on_delta)
+                res = self._run_attempt(prompt, model, request_dir, on_delta=on_delta, effort=effort)
                 final_result.append(res)
             except Exception as exc:  # noqa: BLE001 - propagate worker exception to caller
                 worker_error.append(exc)
@@ -596,7 +614,7 @@ class AntigravityBackend:
             yield {"type": "result", "response": backend_response}
 
     def generate_stream(
-        self, prompt: str, model: str
+        self, prompt: str, model: str, effort: str | None = None
     ) -> Iterator[dict[str, Any]]:
         self._verify_if_required()
         runtime = self._ensure_runtime()
@@ -606,7 +624,7 @@ class AntigravityBackend:
                 prefix="request-", dir=runtime, ignore_cleanup_errors=True
             ) as request_dir:
                 try:
-                    yield from self._stream_attempt(prompt, model, Path(request_dir))
+                    yield from self._stream_attempt(prompt, model, Path(request_dir), effort=effort)
                     return
                 except BackendError as exc:
                     last_error = exc

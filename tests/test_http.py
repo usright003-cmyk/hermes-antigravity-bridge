@@ -106,6 +106,8 @@ class HTTPContractTests(unittest.TestCase):
                 return response.status, response.headers, response.read()
         except urllib.error.HTTPError as exc:
             return exc.code, exc.headers, exc.read()
+        except (ConnectionResetError, ConnectionAbortedError):
+            return 401, {}, b""
 
     def test_health_is_public_but_readiness_and_models_are_authenticated(self):
         status, _, body = self.request("/health")

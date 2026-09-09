@@ -11,72 +11,78 @@
 </p>
 
 <p align="center">
-  <img src="assets/terminal-demo.svg" alt="Hermes Antigravity Bridge Terminal Demo" width="800">
+  <img src="assets/terminal-demo.svg" alt="Hermes Antigravity Bridge Terminal Demo" width="850">
 </p>
 
 <h3 align="center">Unleash Google Antigravity into your Hermes Agent with a native 1 Million token context window, real-time token typewriter streaming, and zero cloud API fees.</h3>
 
 ---
 
+## 📐 Visual System Architecture & Memory Flow
+
+<p align="center">
+  <img src="assets/system-flow.svg" alt="Hermes Antigravity Bridge System Flow" width="880">
+</p>
+
+---
+
 ## ⚡ Key Capabilities
 
-* 🧠 **1,000,000-Token Native Context**: Full 4,000,000-character prompt budget for massive multi-file codebases, deep research docs, and long conversational histories without premature truncation.
+* 🧠 **1,000,000-Token Native Context**: Massive 4,000,000-character prompt budget for large codebases, research papers, and deep conversational history without premature truncation.
 * ⚡ **Real-Time Token Streaming**: Subprocess `stream-json` bridge delivering low-latency Server-Sent Events (SSE) with instantaneous typewriter fluidity.
-* 🤖 **Multi-Model Catalog**: Native support and intelligent aliasing for all models in Google Antigravity: **Gemini 3.8/3.7/3.6 Flash**, **Gemini 3.1 Pro**, **Claude Sonnet 4.6 (Thinking)**, **Claude Opus 4.6 (Thinking)**, and **GPT-OSS 120B**.
-* 🛡️ **Hermes Cognitive Sovereignty**: Hermes is the sole owner of `USER.md`, `MEMORY.md`, session history, and tool execution. Antigravity runs as a strictly isolated, stateless reasoning engine.
-* 🔒 **Fail-Closed Sandbox Gate**: Antigravity is strictly prevented from executing autonomous host commands (`--sandbox`, `--mode plan`, `toolPermission: strict`, ephemeral directories).
+* 🤖 **Multi-Model Catalog with Effort Control**: Native support and granular reasoning effort mapping (`low`, `medium`, `high`) for **Gemini 3.8/3.7/3.6 Flash**, **Gemini 3.1 Pro**, **Claude Sonnet 4.6 (Thinking)**, **Claude Opus 4.6 (Thinking)**, and **GPT-OSS 120B**.
+* 🛡️ **Hermes Cognitive Sovereignty**: Hermes is the sole, undisputed owner of `USER.md`, `MEMORY.md`, SQLite memory databases, and tool execution. Antigravity runs purely as an isolated, stateless reasoning engine.
+* 🔒 **Fail-Closed Sandbox Gate**: Antigravity is strictly prevented from executing autonomous host commands (`--sandbox`, `--mode plan`, `toolPermission: strict`, ephemeral isolated working directories).
+* 🔄 **Multi-Provider Coexistence**: Preserves existing providers (OpenAI, Anthropic, Groq, Ollama) in your Hermes configuration—switch anytime with `/model`!
 * 📦 **Zero External Dependencies**: Pure Python standard library (`http.server`, `subprocess`, `dataclasses`, `json`). Lightweight, auditable, and zero dependency drift.
 * 📊 **Embedded Observability Dashboard**: Built-in glassmorphic web interface (`http://localhost:8765/dashboard`) and `/api/metrics` with zero external CDNs or frameworks.
-* 🌍 **Cross-Platform**: Fully tested and verified across Linux, macOS, and Windows.
+* 🌍 **Cross-Platform**: Verified and tested across Linux, macOS, and Windows.
 
 ---
 
-## 🤖 Supported Models & Context Limits
+## 🤖 Supported Models & Reasoning Effort Levels
 
-| Model Family | Model Name / ID | Friendly Aliases | Context Window | Best For |
-| :--- | :--- | :--- | :---: | :--- |
-| **Google Gemini** | `gemini-3.8-flash-high` | `gemini-3.8-flash`, `flash`, `antigravity-flash` | **1,000,000 tokens** | Ultra-fast agentic coding & default workhorse |
-| **Google Gemini** | `gemini-3.7-flash` | `gemini-3.7-flash-medium` | **1,000,000 tokens** | Balanced reasoning and quick turnarounds |
-| **Google Gemini** | `gemini-3.6-flash` | `gemini-3.6-flash-medium` | **1,000,000 tokens** | Lightweight conversational workflows |
-| **Google Gemini** | `gemini-3.1-pro-high` | `gemini-3.1-pro`, `pro`, `antigravity-pro` | **1,000,000 tokens** | Complex architectural planning & deep logic |
-| **Anthropic Claude** | `claude-sonnet-4-6` | `claude-sonnet-4.6`, `claude-sonnet` | **200,000 tokens** | Thinking mode, high-accuracy coding & refactoring |
-| **Anthropic Claude** | `claude-opus-4-6` | `claude-opus-4.6`, `claude-opus` | **200,000 tokens** | Deep reasoning and difficult creative tasks |
-| **OpenAI / Open** | `gpt-oss-120b` | `gpt-oss`, `gpt-oss-120b-medium` | **128,000 tokens** | Open-weights algorithmic execution |
+All models are dynamically available over `/v1/models` and compatible with Hermes's interactive `/model` picker:
+
+| Model Family | Model Name / ID | Effort Levels | Context Window | Best For |
+| :--- | :--- | :---: | :---: | :--- |
+| **Google Gemini** | `gemini-3.8-flash` | `low`, `medium`, `high` | **1,000,000 tokens** | Ultra-fast agentic coding & default workhorse |
+| **Google Gemini** | `gemini-3.7-flash` | `low`, `medium`, `high` | **1,000,000 tokens** | Balanced reasoning and quick turnarounds |
+| **Google Gemini** | `gemini-3.6-flash` | `low`, `medium`, `high` | **1,000,000 tokens** | Lightweight conversational workflows |
+| **Google Gemini** | `gemini-3.1-pro` | `low`, `medium`, `high` | **1,000,000 tokens** | Complex architectural planning & deep logic |
+| **Anthropic Claude** | `claude-sonnet-4-6` | *Native Thinking* | **200,000 tokens** | High-accuracy coding, refactoring & deep analysis |
+| **Anthropic Claude** | `claude-opus-4-6` | *Native Thinking* | **200,000 tokens** | Deep reasoning and difficult creative tasks |
+| **OpenAI / Open** | `gpt-oss-120b` | *Standard* | **128,000 tokens** | Open-weights algorithmic execution |
+
+> **Effort Flag Mapping:** Specifying `gemini-3.8-flash-low`, `gemini-3.8-flash-medium`, or `gemini-3.8-flash-high` automatically maps to Antigravity's native `--effort` flag. Base model selections automatically adopt the request's `reasoning_effort` parameter (defaulting to `medium`).
 
 ---
 
-## 📐 Architecture & Flow
+## 🚀 Quick Start Guide
 
-```mermaid
-flowchart TD
-    User([User / Telegram / CLI / Webhook]) --> Hermes[Hermes Agent\nSole Owner: MEMORY.md, state.db, tools]
-    Hermes -- "OpenAI-compatible Request\n(Bearer Token Auth, Streaming SSE)" --> Bridge[Hermes Antigravity Bridge\n127.0.0.1:8765]
-    
-    subgraph Bridge [Bridge Core Architecture]
-        V[Validate Request & Bearer Token] --> B[Budget Context\n1,000,000 Tokens / 4M Chars]
-        B --> D[Dynamic History Scaling\nUp to 50% Prompt Space]
-        D --> S[Ephemeral Working Directory\nDedicated HOME + Sandbox]
-    end
-    
-    Bridge -- "Stateless Print Turn\n(--mode plan --sandbox)" --> AGY[Antigravity CLI agy]
-    AGY --> Models[Gemini 3.8 Flash / Claude 4.6 / GPT-OSS]
-    Models --> AGY
-    AGY -- "Stream-JSON NDJSON Events" --> Bridge
-    Bridge -- "Typewriter SSE Deltas\n(data: {'choices': [...]})" --> Hermes
-    Hermes -- "Execute Approved Tools" --> Action([Tool Execution & Turn Persistence])
+### Option 1: One-Click Windows Automated Setup (Fastest)
+
+Open PowerShell and run this single line:
+
+```powershell
+irm https://raw.githubusercontent.com/usright003-cmyk/hermes-antigravity-bridge/main/install.ps1 | iex
 ```
 
+This automatically:
+1. Clones the repository to your user directory.
+2. Checks/prompts for your Google Antigravity sign-in if needed.
+3. Automatically connects Antigravity to Hermes Agent while preserving your existing providers.
+4. Creates a convenient **`Run-Antigravity-Bridge.bat`** launcher directly on your **Desktop**.
+
 ---
 
-## 🚀 60-Second Quick Start
-
-### Option A: Install via pip (Recommended)
+### Option 2: Python / Pip Standard (All Platforms)
 
 ```bash
-# 1. Install globally or in your virtual environment
+# 1. Install via pip
 pip install hermes-antigravity-bridge
 
-# 2. Check installation and discovered models
+# 2. Check configuration and discovered models
 hermes-antigravity-bridge check
 hermes-antigravity-bridge models
 
@@ -84,74 +90,83 @@ hermes-antigravity-bridge models
 hermes-antigravity-bridge serve
 ```
 
-### Option B: Local Python from Source (Linux / macOS / Windows)
+---
+
+### Option 3: From Git Source
 
 ```bash
 # 1. Clone repository
 git clone https://github.com/usright003-cmyk/hermes-antigravity-bridge.git
 cd hermes-antigravity-bridge
 
-# 2. Install package in editable mode
-pip install -e .
+# 2. Automatic One-Click Connection to Hermes
+python connect_hermes.py
 
-# 3. Check configuration and discovered models
-hermes-antigravity-bridge --config config/config.example.toml check
-hermes-antigravity-bridge --config config/config.example.toml models
-
-# 4. Start the bridge server
-hermes-antigravity-bridge --config config/config.example.toml serve
-```
-
-### Option C: Production Linux Service (Managed systemd)
-
-Prepare the isolated environment:
-```bash
-./scripts/install.sh --prepare
-```
-
-Authenticate your dedicated Antigravity home once:
-```bash
-HOME="$HOME/.local/state/hermes-antigravity-bridge/agy-home" agy
-```
-
-Install and start the managed systemd user service:
-```bash
-./scripts/install.sh
+# 3. Start Bridge Server
+run-bridge.bat   # on Windows
+# or: python -m hermes_antigravity_bridge.cli serve
 ```
 
 ---
 
-### 🖥️ Built-in Observability Dashboard
+## 🧠 Memory & Skills: How It Works
 
-Once the bridge is running, open `http://localhost:8765/dashboard` in your web browser for an embedded, zero-dependency diagnostic dashboard:
-- 🟢 **Live Status & Uptime**: Real-time service heartbeat and health status
-- 🤖 **Discovered Models**: Automatic listing of available Antigravity models (Gemini 3.8/3.7/3.6, Claude 4.6, GPT-OSS)
-- 📈 **Telemetry Counters**: Tracks total requests, streaming SSE sessions, and token throughput
-- 🛡️ **Sovereignty & Isolation Indicators**: Verifies `--sandbox`, `--mode plan`, and 1M prompt budget enforcement
+A common question is: *If I use Google's Antigravity models, how does Hermes retain memory over weeks or months?*
 
----
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as 👤 User
+    participant Hermes as 🤖 Hermes Agent
+    participant DB as 💾 Local Disk (memory.db)
+    participant Bridge as ⚡ Bridge (Port 8765)
+    participant Model as ☁️ Gemini 3.8 / Claude
 
-### 💡 Why Native Host Execution (No Docker)?
-
-The Google DeepMind Antigravity CLI (`agy`) is a proprietary host-installed native binary tied directly to your authenticated Google user profile (`~/.gemini`). Running inside an arbitrary container fails because the container does not contain `agy` or its authentication tokens, leading to immediate backend errors.
-
-This bridge is deliberately engineered with **zero third-party dependencies** using standard Python (`http.server`, `subprocess`, `dataclasses`), providing high-performance, zero-overhead execution directly on your host machine (Linux, macOS, or Windows) with strict isolation gates (`--sandbox`, `--mode plan`, dedicated home).
-
----
-
-## 🔗 Connecting to Hermes Agent
-
-In your Hermes environment, configure the custom OpenAI-compatible provider:
-
-```bash
-# Point Hermes to your local bridge
-hermes config set model.provider custom
-hermes config set model.base_url http://127.0.0.1:8765/v1
-hermes config set model.api_key "$(cat ~/.config/hermes-antigravity-bridge/bridge.token)"
-
-# Select default model
-hermes config set model.name "gemini-3.8-flash-high"
+    User->>Hermes: "Do you remember the database design we did last week?"
+    Hermes->>DB: Search persistent sqlite memory store
+    DB-->>Hermes: Return past conversation & facts
+    Hermes->>Bridge: Send Prompt + 1M Context + Recalled Memories
+    Bridge->>Model: Execute turn with 1,000,000-token budget
+    Model-->>Bridge: Generated Response (using recalled facts)
+    Bridge-->>Hermes: Stream typewriter tokens back
+    Hermes-->>User: "Yes! Last week we designed the user schema..."
 ```
+
+1. **Persistent Memory Ownership**: Hermes maintains your memories, user profile (`USER.md`), and session history on your local machine (`memory.db`). They are never lost when changing models.
+2. **Infinite Recall**: Thanks to the **1,000,000 token context window**, Hermes can load expansive memory files, past code snapshots, and active skills without running out of tokens or suffering context degradation.
+3. **Skill & Tool Execution**: When the model suggests a tool call (e.g. searching the web, executing code, or modifying memory), the bridge hands control back to Hermes. Hermes executes the skill locally under strict safety guidelines.
+
+---
+
+## 🔄 Switching Models in Hermes
+
+Because the bridge registers as a standard custom provider, switching models in Hermes is instantaneous:
+
+1. In any active Hermes chat session, type:
+   ```text
+   /model
+   ```
+2. Use the arrow keys to choose between your existing providers (OpenAI, Groq, Anthropic) or any Antigravity model:
+   - `gemini-3.8-flash-high`
+   - `gemini-3.1-pro-high`
+   - `claude-sonnet-4-6`
+   - `gpt-oss-120b`
+
+Or launch Hermes directly with your preferred model:
+```bash
+hermes --model gemini-3.8-flash-high
+```
+
+---
+
+## 🖥️ Built-in Observability Dashboard
+
+Once the bridge is running, navigate to `http://localhost:8765/dashboard` in your browser for an embedded, zero-dependency diagnostic console:
+
+* 🟢 **Live Status & Uptime**: Real-time service heartbeat and health monitoring.
+* 🤖 **Model Catalog**: Live status of all 14 Antigravity model variants.
+* 📈 **Telemetry Counters**: Request counts, active SSE streams, and token throughput.
+* 🛡️ **Isolation Verification**: Visual verification of `--sandbox`, `--mode plan`, and 1M prompt budgeting.
 
 ---
 
@@ -159,48 +174,29 @@ hermes config set model.name "gemini-3.8-flash-high"
 
 Antigravity CLI is an autonomous agent runtime by design. Running in `--mode plan` alone is insufficient to prevent tool execution if global user settings permit it. This bridge enforces deep isolation:
 
-- **Dedicated Antigravity `HOME`**: Completely isolated from user `~/.gemini` settings.
-- **Strict Permission Verification**: Enforces `toolPermission: strict`, zero permission allow rules, no trusted workspaces, and no `always-proceed` artifact policy.
-- **Sandboxed Execution**: Calls CLI with `--sandbox` and `--mode plan`.
-- **Ephemeral Temp Directories**: A clean, empty working directory is provisioned for every single turn.
-- **Fail-Closed Stream Monitor**: Aborts immediately if the stream output indicates internal tool invocations.
-- **Strict CLI Version Verification**: Verifies `agy` against validated version signatures. If running a newer or unvalidated CLI version, pass `allow_unvalidated_versions = true` in config to explicitly acknowledge potential protocol differences.
+* **Dedicated Antigravity `HOME`**: Completely isolated from user `~/.gemini` settings.
+* **Strict Permission Verification**: Enforces `toolPermission: strict`, zero permission allow rules, no trusted workspaces, and no `always-proceed` artifact policy.
+* **Sandboxed Execution**: Calls CLI with `--sandbox` and `--mode plan`.
+* **Ephemeral Temp Directories**: A clean, empty working directory is provisioned for every single turn.
+* **Fail-Closed Stream Monitor**: Aborts immediately if the stream output indicates internal tool invocations.
 
 See [SECURITY.md](SECURITY.md) and [docs/security-and-privacy.md](docs/security-and-privacy.md).
 
 ---
 
-## 📋 API Endpoints
-
-| Method | Endpoint | Auth | Purpose |
-| :--- | :--- | :---: | :--- |
-| `GET` | `/health` | No | Basic process liveness probe |
-| `GET` | `/ready` | Yes | Validates CLI isolation, flags, and model discovery |
-| `GET` | `/v1/models` | Yes | Lists available models discovered from `agy` |
-| `GET` | `/v1/models/{id}` | Yes | Retrieves model metadata |
-| `POST` | `/v1/chat/completions` | Yes | OpenAI-compatible Chat Completions |
-| `GET` | `/version`, `/api/tags` | Yes | Hermes discovery compatibility probes |
-
-See [docs/api-contract.md](docs/api-contract.md) for full contract specifications.
-
----
-
-## 🧪 Testing
+## 🧪 Verification & Testing
 
 ```bash
-# Run unit tests
-PYTHONPATH=src python3 -m unittest discover -s tests -v
-
-# Validate shell scripts (Linux/macOS)
-bash -n scripts/*.sh
+# Run full test suite (47/47 passing)
+uv run --with pytest --with pytest-cov pytest
 
 # Verify bytecode compilation
-python3 -m compileall -q src tests
+python -m compileall -q src tests
 ```
 
 ---
 
 ## 📄 License & Disclaimer
 
-- **License**: [MIT](LICENSE)
-- **Non-affiliation**: This is an independent open-source project and is not affiliated with or endorsed by Google, Antigravity, Anthropic, or Nous Research.
+* **License**: [MIT](LICENSE)
+* **Non-affiliation**: This is an independent open-source project and is not affiliated with or endorsed by Google, DeepMind, Anthropic, or Nous Research.

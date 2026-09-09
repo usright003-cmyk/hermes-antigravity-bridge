@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 480" width="920" height="480">
+  <defs>
+    <style>
+      .bg { fill: #0d1117; stroke: #30363d; stroke-width: 1.5; rx: 12; ry: 12; }
+      .header-bar { fill: #161b22; rx: 12; ry: 12; }
+      .title { fill: #f0f6fc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 15px; font-weight: 600; text-anchor: middle; }
+      .subtitle { fill: #8b949e; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 11px; text-anchor: middle; }
+      .box { fill: #161b22; stroke: #30363d; stroke-width: 1.5; rx: 8; ry: 8; }
+      .box-active { fill: #161b22; stroke: #58a6ff; stroke-width: 2; rx: 8; ry: 8; }
+      .box-purple { fill: #161b22; stroke: #bc8cff; stroke-width: 2; rx: 8; ry: 8; }
+      .box-green { fill: #161b22; stroke: #3fb950; stroke-width: 2; rx: 8; ry: 8; }
+      .box-title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 13px; font-weight: 700; }
+      .box-desc { font-family: "SF Mono", "Segoe UI Mono", Menlo, monospace; font-size: 11px; fill: #8b949e; }
+      .tag { font-family: "SF Mono", "Segoe UI Mono", Menlo, monospace; font-size: 10px; font-weight: 600; }
+      .arrow { stroke: #58a6ff; stroke-width: 2; stroke-linecap: round; }
+      .arrow-purple { stroke: #bc8cff; stroke-width: 2; stroke-linecap: round; }
+      .arrow-dashed { stroke: #3fb950; stroke-width: 1.5; stroke-dasharray: 4 4; }
+      .dot-red { fill: #ff5f56; }
+      .dot-yellow { fill: #ffbd2e; }
+      .dot-green { fill: #27c93f; }
+    </style>
+    <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#58a6ff" />
+    </marker>
+    <marker id="arrowhead-purple" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#bc8cff" />
+    </marker>
+    <marker id="arrowhead-green" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3fb950" />
+    </marker>
+  </defs>
+
+  <!-- Background Canvas -->
+  <rect width="920" height="480" class="bg" />
+  
+  <!-- Header Bar -->
+  <rect width="920" height="44" class="header-bar" />
+  <circle cx="22" cy="22" r="6" class="dot-red" />
+  <circle cx="42" cy="22" r="6" class="dot-yellow" />
+  <circle cx="62" cy="22" r="6" class="dot-green" />
+  <text x="460" y="24" class="title">Hermes Agent + Antigravity Bridge Architecture &amp; Memory Sovereignty</text>
+  <text x="460" y="38" class="subtitle">1,000,000-Token Native Context &#8226; Local Persistent Memory &#8226; Zero Cloud Fees</text>
+
+  <!-- Node 1: Hermes Agent Core -->
+  <rect x="35" y="70" width="240" height="150" class="box-active" />
+  <text x="50" y="96" class="box-title" fill="#58a6ff">🤖 Hermes Agent Core</text>
+  <text x="50" y="116" class="box-desc">&#8226; Persistent Memory (memory.db)</text>
+  <text x="50" y="136" class="box-desc">&#8226; Long-Term User Profile</text>
+  <text x="50" y="156" class="box-desc">&#8226; Custom Skills &amp; Tools</text>
+  <text x="50" y="176" class="box-desc">&#8226; Multi-Provider Switching (/model)</text>
+  <rect x="50" y="188" width="120" height="18" rx="4" fill="#1f6feb" />
+  <text x="56" y="201" class="tag" fill="#ffffff">Cognitive Sovereign</text>
+
+  <!-- Arrow 1 -> 2: Request -->
+  <line x1="275" y1="130" x2="335" y2="130" class="arrow" marker-end="url(#arrowhead)" />
+  <text x="285" y="120" class="tag" fill="#58a6ff">Prompt + Tools</text>
+
+  <!-- Node 2: Local HTTP Bridge -->
+  <rect x="345" y="70" width="240" height="150" class="box-green" />
+  <text x="360" y="96" class="box-title" fill="#3fb950">⚡ Antigravity Bridge</text>
+  <text x="360" y="116" class="box-desc">&#8226; Listening: 127.0.0.1:8765</text>
+  <text x="360" y="136" class="box-desc">&#8226; 1,000,000 Token Budgeter</text>
+  <text x="360" y="156" class="box-desc">&#8226; UTF-8 SSE Stream Delivery</text>
+  <text x="360" y="176" class="box-desc">&#8226; Effort: Low / Med / High</text>
+  <rect x="360" y="188" width="105" height="18" rx="4" fill="#238636" />
+  <text x="366" y="201" class="tag" fill="#ffffff">Port 8765 Active</text>
+
+  <!-- Arrow 2 -> 3: Subprocess -->
+  <line x1="585" y1="130" x2="645" y2="130" class="arrow-purple" marker-end="url(#arrowhead-purple)" />
+  <text x="592" y="120" class="tag" fill="#bc8cff">stream-json</text>
+
+  <!-- Node 3: Antigravity CLI -->
+  <rect x="655" y="70" width="230" height="150" class="box-purple" />
+  <text x="670" y="96" class="box-title" fill="#bc8cff">⚙️ Antigravity CLI</text>
+  <text x="670" y="116" class="box-desc">&#8226; Native Binary: agy.exe</text>
+  <text x="670" y="136" class="box-desc">&#8226; Flag: --mode plan --sandbox</text>
+  <text x="670" y="156" class="box-desc">&#8226; Local Auth: jetski_state</text>
+  <text x="670" y="176" class="box-desc">&#8226; Zero autonomous host tools</text>
+  <rect x="670" y="188" width="105" height="18" rx="4" fill="#8957e5" />
+  <text x="676" y="201" class="tag" fill="#ffffff">Isolated Engine</text>
+
+  <!-- Downward Arrow 3 -> Cloud -->
+  <line x1="770" y1="220" x2="770" y2="270" class="arrow-purple" marker-end="url(#arrowhead-purple)" />
+
+  <!-- Node 4: Google Cloud AI Models (Bottom Full Width Panel) -->
+  <rect x="35" y="280" width="850" height="170" class="box" />
+  <text x="55" y="308" class="box-title" fill="#f0f6fc">☁️ Cloud AI Reasoning Fleet (Accessed seamlessly with 1M Token Window)</text>
+
+  <!-- Model Badges in Grid -->
+  <!-- Gemini 3.8 Flash -->
+  <rect x="55" y="325" width="190" height="105" rx="6" fill="#161b22" stroke="#30363d" />
+  <text x="68" y="348" font-family="-apple-system, sans-serif" font-size="12" font-weight="bold" fill="#58a6ff">Gemini 3.8 Flash</text>
+  <text x="68" y="368" class="box-desc">&#8226; 1M Tokens Native</text>
+  <text x="68" y="386" class="box-desc">&#8226; Low / Med / High Effort</text>
+  <text x="68" y="404" class="box-desc">&#8226; Super-fast Agentic Core</text>
+
+  <!-- Gemini 3.1 Pro -->
+  <rect x="260" y="325" width="190" height="105" rx="6" fill="#161b22" stroke="#30363d" />
+  <text x="273" y="348" font-family="-apple-system, sans-serif" font-size="12" font-weight="bold" fill="#3fb950">Gemini 3.1 Pro</text>
+  <text x="273" y="368" class="box-desc">&#8226; 1M Tokens Native</text>
+  <text x="273" y="386" class="box-desc">&#8226; Low / Med / High Effort</text>
+  <text x="273" y="404" class="box-desc">&#8226; Deep Logic &amp; Architecture</text>
+
+  <!-- Claude Sonnet 4.6 -->
+  <rect x="465" y="325" width="200" height="105" rx="6" fill="#161b22" stroke="#30363d" />
+  <text x="478" y="348" font-family="-apple-system, sans-serif" font-size="12" font-weight="bold" fill="#d29922">Claude Sonnet 4.6</text>
+  <text x="478" y="368" class="box-desc">&#8226; Thinking Mode Active</text>
+  <text x="478" y="386" class="box-desc">&#8226; 200,000 Token Window</text>
+  <text x="478" y="404" class="box-desc">&#8226; Precision Refactoring</text>
+
+  <!-- GPT-OSS 120B -->
+  <rect x="680" y="325" width="190" height="105" rx="6" fill="#161b22" stroke="#30363d" />
+  <text x="693" y="348" font-family="-apple-system, sans-serif" font-size="12" font-weight="bold" fill="#bc8cff">GPT-OSS 120B</text>
+  <text x="693" y="368" class="box-desc">&#8226; Open-weights Execution</text>
+  <text x="693" y="386" class="box-desc">&#8226; 128,000 Token Window</text>
+  <text x="693" y="404" class="box-desc">&#8226; Algorithmic Synthesis</text>
+
+  <!-- Return Flow Arrow back to Hermes -->
+  <path d="M 55 315 C 20 290 20 180 35 150" fill="none" class="arrow-dashed" marker-end="url(#arrowhead-green)" />
+  <text x="10" y="240" font-family="monospace" font-size="10" fill="#3fb950" transform="rotate(-90 15,240)">Tool Call &amp; Memory Return</text>
+</svg>

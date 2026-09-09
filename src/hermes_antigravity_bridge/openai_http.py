@@ -290,7 +290,7 @@ async function pollMetrics() {
     }
   } catch (err) {
     const sb = document.getElementById('status-badge');
-    sb.textContent = '\u25CF OFFLINE';
+    sb.textContent = '\\u25CF OFFLINE';
     sb.style.color = '#f85149';
     sb.style.borderColor = '#f85149';
   }
@@ -424,6 +424,12 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
     def _require_auth(self) -> bool:
         if self._authorized():
             return True
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if 0 < length <= 65536:
+                self.rfile.read(length)
+        except Exception:
+            pass
         self._error(401, "unauthorized", "auth_error")
         return False
 

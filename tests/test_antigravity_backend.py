@@ -71,6 +71,32 @@ class AntigravityBackendTests(unittest.TestCase):
             with self.assertRaisesRegex(UnknownModel, "unknown model"):
                 backend.resolve_model("invented-model")
 
+    def test_model_alias_resolution_matches_dropdown_variants(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = self.make_backend(Path(tmp))
+            with patch.object(
+                backend,
+                "list_models",
+                return_value=(
+                    "gemini-3.8-flash-high",
+                    "gemini-3.7-flash-medium",
+                    "gemini-3.6-flash-medium",
+                    "gemini-3.1-pro-low",
+                    "claude-sonnet-4-6",
+                    "claude-opus-4-6",
+                    "gpt-oss-120b",
+                ),
+            ):
+                self.assertEqual(backend.resolve_model("Gemini 3.8 Flash"), "gemini-3.8-flash-high")
+                self.assertEqual(backend.resolve_model("gemini-3.7-flash"), "gemini-3.7-flash-medium")
+                self.assertEqual(backend.resolve_model("Gemini 3.6 Flash"), "gemini-3.6-flash-medium")
+                self.assertEqual(backend.resolve_model("Gemini 3.1 Pro"), "gemini-3.1-pro-low")
+                self.assertEqual(backend.resolve_model("Claude Sonnet 4.6 (Thinking)"), "claude-sonnet-4-6")
+                self.assertEqual(backend.resolve_model("claude-sonnet-4.6"), "claude-sonnet-4-6")
+                self.assertEqual(backend.resolve_model("Claude Opus 4.6 (Thinking)"), "claude-opus-4-6")
+                self.assertEqual(backend.resolve_model("GPT-OSS 120B (Medium)"), "gpt-oss-120b")
+                self.assertEqual(backend.resolve_model("gpt-oss-120b"), "gpt-oss-120b")
+
     def test_generate_uses_ephemeral_empty_working_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Path(tmp) / "runtime"

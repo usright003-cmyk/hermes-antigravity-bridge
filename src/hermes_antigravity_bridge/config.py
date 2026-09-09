@@ -74,7 +74,7 @@ class ServerConfig:
     token: str = field(repr=False)
     token_file: Path | None = None
     allow_remote: bool = False
-    request_body_limit_bytes: int = 8 * 1024 * 1024
+    request_body_limit_bytes: int = 16 * 1024 * 1024
     max_concurrent_requests: int = 4
 
 
@@ -226,7 +226,7 @@ class BridgeConfig:
 
         prompt = PromptBudget(
             max_chars=_as_int(
-                env.get("AGY_MAX_PROMPT_CHARS", prompt_raw.get("max_chars", 64_000)),
+                env.get("AGY_MAX_PROMPT_CHARS", prompt_raw.get("max_chars", 4_000_000)),
                 name="prompt.max_chars",
                 minimum=4_096,
             ),
@@ -237,6 +237,14 @@ class BridgeConfig:
                 ),
                 name="prompt.output_token_reserve",
                 minimum=0,
+            ),
+            chars_per_token=_as_int(
+                env.get(
+                    "AGY_CHARS_PER_TOKEN",
+                    prompt_raw.get("chars_per_token", 4),
+                ),
+                name="prompt.chars_per_token",
+                minimum=1,
             ),
             model_context_tokens=model_limits,
         )
@@ -260,11 +268,11 @@ class BridgeConfig:
             request_body_limit_bytes=_as_int(
                 env.get(
                     "AGY_REQUEST_BODY_LIMIT_BYTES",
-                    server_raw.get("request_body_limit_bytes", 8 * 1024 * 1024),
+                    server_raw.get("request_body_limit_bytes", 16 * 1024 * 1024),
                 ),
                 name="server.request_body_limit_bytes",
                 minimum=4_096,
-                maximum=64 * 1024 * 1024,
+                maximum=128 * 1024 * 1024,
             ),
             max_concurrent_requests=_as_int(
                 env.get(

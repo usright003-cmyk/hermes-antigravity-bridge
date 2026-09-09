@@ -232,15 +232,59 @@ class AntigravityBackend:
     def resolve_model(self, requested: str) -> str:
         requested = str(requested or "").strip()
         aliases = {
+            # Default & Gemini family aliases
             "antigravity": self.config.default_model,
             "antigravity-pro": "gemini-3.1-pro-high",
             "antigravity-flash": "gemini-3.8-flash-medium",
             "antigravity-flash-fast": "gemini-3.8-flash-low",
+            "pro": "gemini-3.1-pro-high",
+            "flash": "gemini-3.8-flash-medium",
+            "gemini-3.8-flash": "gemini-3.8-flash-medium",
+            "gemini-3.7-flash": "gemini-3.7-flash-medium",
+            "gemini-3.6-flash": "gemini-3.6-flash-medium",
+            "gemini-3.1-pro": "gemini-3.1-pro-high",
+            "gemini-pro": "gemini-3.1-pro-high",
+            "gemini-flash": "gemini-3.8-flash-medium",
+            "gemini 3.8 flash": "gemini-3.8-flash-high",
+            "gemini 3.7 flash": "gemini-3.7-flash-medium",
+            "gemini 3.6 flash": "gemini-3.6-flash-medium",
+            "gemini 3.1 pro": "gemini-3.1-pro-low",
+            # Anthropic Claude family aliases
+            "claude-sonnet-4-6": "claude-sonnet-4-6",
+            "claude-sonnet-4.6": "claude-sonnet-4-6",
+            "claude sonnet 4.6 (thinking)": "claude-sonnet-4-6",
+            "claude sonnet 4.6": "claude-sonnet-4-6",
+            "claude-opus-4-6": "claude-opus-4-6",
+            "claude-opus-4.6": "claude-opus-4-6",
+            "claude opus 4.6 (thinking)": "claude-opus-4-6",
+            "claude opus 4.6": "claude-opus-4-6",
+            "claude-sonnet": "claude-sonnet-4-6",
+            "claude-3-7-sonnet": "claude-3-7-sonnet",
+            "claude-3.7-sonnet": "claude-3-7-sonnet",
+            "claude-3.5-sonnet": "claude-3-5-sonnet",
+            "claude-opus": "claude-opus-4-6",
+            "claude-3-opus": "claude-opus-4-6",
+            # OpenAI / GPT-OSS family aliases
+            "gpt-oss-120b": "gpt-oss-120b",
+            "gpt-oss-120b (medium)": "gpt-oss-120b",
+            "gpt-oss 120b (medium)": "gpt-oss-120b",
+            "gpt-oss 120b": "gpt-oss-120b",
+            "gpt-oss": "gpt-oss-120b",
+            "gpt-4": "gpt-4o",
         }
-        candidate = aliases.get(requested, requested or self.config.default_model)
-        if candidate not in self.list_models():
-            raise UnknownModel(f"unknown model: {requested or candidate}")
-        return candidate
+        candidate = aliases.get(requested.lower(), requested or self.config.default_model)
+        available = self.list_models()
+        if candidate in available:
+            return candidate
+        if requested in available:
+            return requested
+        norm_req = requested.lower().replace(" ", "-").replace("_", "-")
+        norm_cand = candidate.lower().replace(" ", "-").replace("_", "-")
+        for item in available:
+            norm_item = item.lower().replace(" ", "-").replace("_", "-")
+            if norm_item in (norm_req, norm_cand):
+                return item
+        raise UnknownModel(f"unknown model: {requested or candidate}")
 
     def readiness(self) -> dict[str, Any]:
         self._verify_if_required()

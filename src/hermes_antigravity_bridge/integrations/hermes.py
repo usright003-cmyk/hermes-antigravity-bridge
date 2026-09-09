@@ -47,7 +47,7 @@ class HermesPromptBuilder:
         messages: Sequence[dict[str, Any]],
         tools: Sequence[dict[str, Any]] | None = None,
         *,
-        max_chars: int = 64_000,
+        max_chars: int = 4_000_000,
     ) -> str:
         if not messages:
             raise InvalidRequest("messages must be a non-empty array")
@@ -107,7 +107,7 @@ class HermesPromptBuilder:
         if candidates:
             all_blocks = [serialize_history_message(message) for message in candidates]
             history_needed = sum(len(block) for block in all_blocks) + max(0, len(all_blocks) - 1)
-            history_reserve = min(history_needed, min(12_000, available // 4))
+            history_reserve = min(history_needed, available // 2)
         else:
             history_reserve = 0
 
@@ -118,7 +118,7 @@ class HermesPromptBuilder:
                 max_description_chars=self.max_tool_description_chars,
             )
             tools_needed = len(full_tools)
-            tools_reserve = min(tools_needed, min(20_000, available // 3))
+            tools_reserve = min(tools_needed, available // 3)
         else:
             tools_needed = 0
             tools_reserve = 0

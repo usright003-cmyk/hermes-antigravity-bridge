@@ -11,7 +11,7 @@ Priority order:
 5. Newest complete history/tool-result JSON records.
 6. Final current-request guard.
 
-The 64,000-character default is an operational bridge cap, not a claim about provider token limits. Optional documented model limits may reduce it. They never increase it.
+The 4,000,000-character (~1,000,000 tokens at 4 chars/token) default aligns with Google Gemini's native context window while maintaining deterministic character/token budgeting. Configured model limits (e.g. 200k tokens for Claude, 128k tokens for GPT) or custom caps (`AGY_MAX_PROMPT_CHARS`) may adjust or constrain it.
 
 The latest request is serialized without low-entropy normalization. If it cannot fit, the bridge fails explicitly. Non-latest repeated-character runs of 512 or more non-whitespace characters are represented as:
 

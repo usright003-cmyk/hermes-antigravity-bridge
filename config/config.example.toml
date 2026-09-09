@@ -3,7 +3,7 @@ host = "127.0.0.1"
 port = 8765
 token_file = "~/.config/hermes-antigravity-bridge/bridge.token"
 allow_remote = false
-request_body_limit_bytes = 8388608
+request_body_limit_bytes = 16777216
 max_concurrent_requests = 4
 
 [antigravity]
@@ -21,8 +21,9 @@ validated_versions = ["1.1.28"]
 allow_unvalidated_versions = false
 
 [prompt]
-max_chars = 64000
+max_chars = 4000000
 output_token_reserve = 8192
+chars_per_token = 4
 
 [prompt.model_context_tokens]
 # Add only limits verified from authoritative provider documentation.

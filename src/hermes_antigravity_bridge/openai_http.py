@@ -34,6 +34,275 @@ def _safe_client_message(error: BridgeError) -> str:
 _SLOT_ACQUIRE_TIMEOUT_SECONDS: float = 0.05
 
 
+class BridgeMetrics:
+    """Thread-safe in-memory telemetry counters for diagnostic monitoring."""
+
+    def __init__(self) -> None:
+        self.start_time: float = time.time()
+        self._lock = threading.Lock()
+        self.total_requests: int = 0
+        self.streaming_requests: int = 0
+        self.tokens_streamed: int = 0
+        self.error_count: int = 0
+
+    def record_request(self, *, streaming: bool = False) -> None:
+        with self._lock:
+            self.total_requests += 1
+            if streaming:
+                self.streaming_requests += 1
+
+    def record_tokens(self, count: int = 1) -> None:
+        with self._lock:
+            self.tokens_streamed += count
+
+    def record_error(self) -> None:
+        with self._lock:
+            self.error_count += 1
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            uptime = int(time.time() - self.start_time)
+            return {
+                "uptime_seconds": uptime,
+                "total_requests": self.total_requests,
+                "streaming_requests": self.streaming_requests,
+                "tokens_streamed": self.tokens_streamed,
+                "error_count": self.error_count,
+            }
+
+
+_DASHBOARD_HTML: bytes = b"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hermes Antigravity Bridge - Dashboard</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --card-bg: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-bright: #f0f6fc;
+    --accent: #58a6ff;
+    --green: #3fb950;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background-color: var(--bg);
+    color: var(--text);
+    padding: 24px;
+    line-height: 1.5;
+  }
+  .container { max-width: 900px; margin: 0 auto; }
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 16px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .title-group { display: flex; align-items: center; gap: 12px; }
+  .logo { font-size: 24px; }
+  h1 { font-size: 20px; font-weight: 600; color: var(--text-bright); }
+  .badges { display: flex; gap: 8px; align-items: center; }
+  .badge {
+    font-size: 12px;
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-weight: 500;
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+  }
+  .badge-live {
+    background: rgba(63, 185, 80, 0.15);
+    color: var(--green);
+    border-color: rgba(63, 185, 80, 0.4);
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .card-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: #8b949e; }
+  .card-value { font-size: 26px; font-weight: 700; color: var(--text-bright); }
+  .panel {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 24px;
+  }
+  .panel h2 { font-size: 15px; margin-bottom: 12px; color: var(--text-bright); }
+  .model-list { list-style: none; display: flex; flex-wrap: wrap; gap: 8px; }
+  .model-item {
+    background: rgba(88, 166, 255, 0.1);
+    color: var(--accent);
+    border: 1px solid rgba(88, 166, 255, 0.3);
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-family: monospace;
+    font-size: 13px;
+  }
+  .security-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 12px;
+  }
+  .sec-item {
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.02);
+    padding: 12px;
+    border-radius: 6px;
+  }
+  .sec-item strong { color: var(--text-bright); font-size: 13px; display: block; margin-bottom: 4px; }
+  .sec-item span { font-size: 12px; color: #8b949e; }
+  footer {
+    text-align: center;
+    font-size: 12px;
+    color: #8b949e;
+    margin-top: 32px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  footer a { color: var(--accent); text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <div class="title-group">
+      <span class="logo">&#9889;</span>
+      <div>
+        <h1>Hermes Antigravity Bridge</h1>
+        <div style="font-size: 12px; color: #8b949e;">Local OpenAI Compatibility Gateway</div>
+      </div>
+    </div>
+    <div class="badges">
+      <span class="badge" id="version-badge">v0.1.0</span>
+      <span class="badge badge-live" id="status-badge">&#9679; ONLINE</span>
+    </div>
+  </header>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-title">&#9201; Uptime</div>
+      <div class="card-value" id="val-uptime">0s</div>
+    </div>
+    <div class="card">
+      <div class="card-title">&#128260; Total Requests</div>
+      <div class="card-value" id="val-requests">0</div>
+    </div>
+    <div class="card">
+      <div class="card-title">&#128424; Typewriter Streams</div>
+      <div class="card-value" id="val-streams">0</div>
+    </div>
+    <div class="card">
+      <div class="card-title">&#9889; Tokens Streamed</div>
+      <div class="card-value" id="val-tokens">0</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>&#129302; Discovered Models</h2>
+    <ul class="model-list" id="models-container">
+      <li class="model-item">Scanning backend...</li>
+    </ul>
+  </div>
+
+  <div class="panel">
+    <h2>&#128737;&#65039; Sovereign Architecture & Safety Gates</h2>
+    <div class="security-grid">
+      <div class="sec-item">
+        <strong>&#128274; Tool Isolation</strong>
+        <span>Strict Fail-Closed (--sandbox --mode plan). Autonomous host execution blocked.</span>
+      </div>
+      <div class="sec-item">
+        <strong>&#129504; Memory Custody</strong>
+        <span>Hermes retains 100% ownership of MEMORY.md and session context.</span>
+      </div>
+      <div class="sec-item">
+        <strong>&#128207; Context Budget</strong>
+        <span>Enforces 64,000 character maximum prompt cap.</span>
+      </div>
+      <div class="sec-item">
+        <strong>&#9889; Low-Latency Transport</strong>
+        <span>TCP_NODELAY active on loopback socket connections.</span>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    Hermes Antigravity Bridge &bull; <a href="https://pypi.org/project/hermes-antigravity-bridge/" target="_blank">PyPI</a> &bull; <a href="https://github.com/usright003-cmyk/hermes-antigravity-bridge" target="_blank">GitHub</a>
+  </footer>
+</div>
+
+<script>
+function formatUptime(sec) {
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  if (d > 0) return d + "d " + h + "h " + m + "m";
+  if (h > 0) return h + "h " + m + "m " + s + "s";
+  if (m > 0) return m + "m " + s + "s";
+  return s + "s";
+}
+async function pollMetrics() {
+  try {
+    const res = await fetch('/api/metrics');
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    document.getElementById('version-badge').textContent = 'v' + data.version;
+    document.getElementById('val-uptime').textContent = formatUptime(data.metrics.uptime_seconds);
+    document.getElementById('val-requests').textContent = data.metrics.total_requests;
+    document.getElementById('val-streams').textContent = data.metrics.streaming_requests;
+    document.getElementById('val-tokens').textContent = data.metrics.tokens_streamed;
+    
+    const container = document.getElementById('models-container');
+    container.innerHTML = '';
+    if (data.models && data.models.length > 0) {
+      data.models.forEach(m => {
+        const li = document.createElement('li');
+        li.className = 'model-item';
+        li.textContent = m;
+        container.appendChild(li);
+      });
+    } else {
+      const li = document.createElement('li');
+      li.className = 'model-item';
+      li.textContent = 'None detected (check agy)';
+      container.appendChild(li);
+    }
+  } catch (err) {
+    const sb = document.getElementById('status-badge');
+    sb.textContent = '\u25CF OFFLINE';
+    sb.style.color = '#f85149';
+    sb.style.borderColor = '#f85149';
+  }
+}
+pollMetrics();
+setInterval(pollMetrics, 2500);
+</script>
+</body>
+</html>
+"""
+
+
 class BridgeHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -46,6 +315,7 @@ class BridgeHTTPServer(ThreadingHTTPServer):
     ) -> None:
         self.bridge_config = config
         self.chat_service = service
+        self.metrics = BridgeMetrics()
         self.request_slots = threading.BoundedSemaphore(
             config.server.max_concurrent_requests
         )
@@ -143,6 +413,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             _LOG.info("client disconnected before response delivery")
 
     def _error(self, status: int, message: str, error_type: str) -> None:
+        self.bridge_server.metrics.record_error()
         self._send(status, {"error": {"message": message, "type": error_type}})
 
     def _authorized(self) -> bool:
@@ -158,6 +429,32 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = urlsplit(self.path).path
+        if path in {"/dashboard", "/"}:
+            self._send(200, _DASHBOARD_HTML, content_type="text/html; charset=utf-8")
+            return
+        if path == "/api/metrics":
+            stats = self.bridge_server.metrics.snapshot()
+            try:
+                models = self.bridge_server.chat_service.list_models()
+            except Exception:  # noqa: BLE001
+                models = []
+            self._send(
+                200,
+                {
+                    "service": "hermes-antigravity-bridge",
+                    "version": __version__,
+                    "status": "online",
+                    "models": models,
+                    "metrics": stats,
+                    "config": {
+                        "max_prompt_chars": self.bridge_server.bridge_config.prompt.max_chars,
+                        "max_concurrent_requests": self.bridge_server.bridge_config.server.max_concurrent_requests,
+                        "host": self.bridge_server.bridge_config.server.host,
+                        "port": self.bridge_server.bridge_config.server.port,
+                    },
+                },
+            )
+            return
         if path == "/health":
             self._send(
                 200,
@@ -312,6 +609,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         try:
             result = self.bridge_server.chat_service.complete(body)
             response = self._completion_response(result)
+            self.bridge_server.metrics.record_request(streaming=False)
             self._send(200, response)
         except BridgeError as exc:
             self._error(exc.status_code, _safe_client_message(exc), exc.error_type)
@@ -333,6 +631,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 
         stream_id = "chatcmpl-" + uuid.uuid4().hex
         now = int(time.time())
+        self.bridge_server.metrics.record_request(streaming=True)
         try:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -344,6 +643,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             def emit_item(item: dict[str, Any]) -> None:
                 itype = item.get("type")
                 if itype == "delta":
+                    self.bridge_server.metrics.record_tokens(1)
                     chunk = {
                         "id": stream_id,
                         "object": "chat.completion.chunk",

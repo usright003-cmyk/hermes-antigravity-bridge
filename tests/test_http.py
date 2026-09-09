@@ -278,6 +278,43 @@ class HTTPContractTests(unittest.TestCase):
         self.assertEqual(set(statuses), {200})
         self.assertEqual(len(statuses), 100)
 
+    def test_dashboard_endpoint_returns_html(self):
+        status, headers, body = self.request("/dashboard")
+        self.assertEqual(status, 200)
+        self.assertIn("text/html", headers.get("content-type", ""))
+        self.assertIn(b"Hermes Antigravity Bridge", body)
+        self.assertIn(b"Dashboard", body)
+
+    def test_api_metrics_endpoint_tracks_requests_and_tokens(self):
+        status, _, body = self.request("/api/metrics")
+        self.assertEqual(status, 200)
+        data = json.loads(body.decode("utf-8"))
+        self.assertEqual(data["status"], "online")
+        self.assertIn("metrics", data)
+        initial_requests = data["metrics"]["total_requests"]
+
+        # Run a completion
+        comp_status, _, _ = self.request(
+            "/v1/chat/completions",
+            method="POST",
+            auth=True,
+            body={
+                "model": "model-a",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+        self.assertEqual(comp_status, 200)
+
+        # Check metrics updated
+        status, _, updated_body = self.request("/api/metrics")
+        self.assertEqual(status, 200)
+        updated_data = json.loads(updated_body.decode("utf-8"))
+        self.assertEqual(
+            updated_data["metrics"]["total_requests"], initial_requests + 1
+        )
+        self.assertGreaterEqual(updated_data["metrics"]["uptime_seconds"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
+

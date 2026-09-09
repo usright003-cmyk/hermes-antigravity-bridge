@@ -8,6 +8,10 @@
   <img src="https://img.shields.io/badge/dependencies-zero-success.svg" alt="Zero Dependencies">
 </p>
 
+<p align="center">
+  <img src="assets/terminal-demo.svg" alt="Hermes Antigravity Bridge Terminal Demo" width="800">
+</p>
+
 A local, authenticated compatibility bridge that lets **Hermes Agent** use advanced models (e.g. Gemini 3.8 Flash, Gemini 3.1 Pro) exposed by the **Google DeepMind Antigravity CLI (`agy`)** via an OpenAI-compatible HTTP interface — while Hermes remains the strict single source of truth for memories, sessions, skills, tools, and continuity.
 
 ---
@@ -94,6 +98,16 @@ Install and start the managed systemd user service:
 ```bash
 ./scripts/install.sh
 ```
+
+---
+
+### 🖥️ Built-in Observability Dashboard
+
+Once the bridge is running, open `http://localhost:8765/dashboard` in your web browser for an embedded, zero-dependency diagnostic dashboard:
+- 🟢 **Live Status & Uptime**: Real-time service heartbeat
+- 🤖 **Discovered Models**: Automatic listing of available Antigravity models (`gemini-3.8-flash`, `gemini-3.1-pro`)
+- 📈 **Telemetry Counters**: Tracks total requests, streaming sessions, and token throughput
+- 🛡️ **Sovereignty & Isolation Indicators**: Verifies `--sandbox`, `--mode plan`, and prompt budget enforcement
 
 ---
 

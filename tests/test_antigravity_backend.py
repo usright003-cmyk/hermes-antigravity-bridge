@@ -81,9 +81,9 @@ class AntigravityBackendTests(unittest.TestCase):
             self.assertEqual(response.response, "FAKE_OK")
             recorded = json.loads(record.read_text(encoding="utf-8"))
             request_cwd = Path(recorded["cwd"])
-            self.assertEqual(request_cwd.parent, runtime)
+            self.assertEqual(request_cwd.parent.resolve(), runtime.resolve())
             self.assertFalse(request_cwd.exists())
-            self.assertEqual(recorded["home"], str(backend.config.home))
+            self.assertEqual(Path(recorded["home"]).resolve(), backend.config.home.resolve())
             self.assertIn("--sandbox", recorded["argv"])
 
     def test_false_success_is_an_upstream_protocol_error(self):

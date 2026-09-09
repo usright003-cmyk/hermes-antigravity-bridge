@@ -51,6 +51,14 @@ class BridgeHTTPServer(ThreadingHTTPServer):
         )
         super().__init__(address, BridgeRequestHandler)
 
+    def get_request(self) -> tuple[Any, Any]:
+        sock, addr = super().get_request()
+        try:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError:
+            pass
+        return sock, addr
+
     def process_request(self, request: Any, client_address: Any) -> None:
         if not self.request_slots.acquire(timeout=_SLOT_ACQUIRE_TIMEOUT_SECONDS):
             body = _json_bytes(

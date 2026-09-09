@@ -428,8 +428,8 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
             if 0 < length <= 65536:
                 self.rfile.read(length)
-        except Exception:
-            pass
+        except (OSError, ValueError):
+            _LOG.debug("Failed to drain unread unauthorized request body")
         self._error(401, "unauthorized", "auth_error")
         return False
 

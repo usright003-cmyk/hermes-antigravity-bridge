@@ -434,7 +434,7 @@ class AntigravityBackend:
                 encoding="utf-8",
                 errors="replace",
                 bufsize=1,
-                start_new_session=True if os.name == "posix" else False,
+                start_new_session=(os.name == "posix"),
             )
         except OSError as exc:
             raise BackendUnavailable("could not start Antigravity CLI") from exc

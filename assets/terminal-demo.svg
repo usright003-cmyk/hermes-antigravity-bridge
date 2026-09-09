@@ -1,113 +1,58 @@
-﻿<svg fill="none" viewBox="0 0 800 440" width="800" height="440" xmlns="http://www.w3.org/2000/svg">
-  <foreignObject width="100%" height="100%">
-    <div xmlns="http://www.w3.org/1999/xhtml">
-      <style>
-        .terminal-container {
-          background: #0d1117;
-          border: 1px solid #30363d;
-          border-radius: 10px;
-          box-shadow: 0 16px 32px rgba(0,0,0,0.45);
-          font-family: -apple-system, BlinkMacSystemFont, "SF Mono", "Segoe UI Mono", "Roboto Mono", Menlo, monospace;
-          color: #c9d1d9;
-          padding: 0;
-          margin: 0;
-          overflow: hidden;
-          width: 798px;
-          height: 438px;
-          box-sizing: border-box;
-        }
-        .titlebar {
-          background: #161b22;
-          border-bottom: 1px solid #30363d;
-          padding: 12px 16px;
-          display: flex;
-          align-items: center;
-          gap: 8px;
-        }
-        .btn { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
-        .btn-close { background: #ff5f56; }
-        .btn-min { background: #ffbd2e; }
-        .btn-max { background: #27c93f; }
-        .window-title {
-          flex: 1;
-          text-align: center;
-          font-size: 12px;
-          color: #8b949e;
-          font-weight: 500;
-          margin-right: 48px;
-        }
-        .content {
-          padding: 20px 24px;
-          font-size: 13px;
-          line-height: 1.6;
-        }
-        .line { margin-bottom: 6px; }
-        .prompt { color: #58a6ff; font-weight: 600; }
-        .command { color: #f0f6fc; font-weight: 600; }
-        .tag-info { color: #58a6ff; }
-        .tag-green { color: #3fb950; font-weight: 600; }
-        .tag-yellow { color: #d29922; }
-        .tag-purple { color: #bc8cff; font-weight: 600; }
-        .tag-gray { color: #8b949e; }
-        .cursor {
-          display: inline-block;
-          width: 8px;
-          height: 15px;
-          background: #58a6ff;
-          margin-left: 4px;
-          vertical-align: middle;
-          animation: blink 1s infinite;
-        }
-        @keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
-        .badge-live {
-          background: rgba(63, 185, 80, 0.15);
-          color: #3fb950;
-          border: 1px solid rgba(63, 185, 80, 0.4);
-          border-radius: 4px;
-          padding: 2px 6px;
-          font-size: 11px;
-        }
-      </style>
-      <div class="terminal-container">
-        <div class="titlebar">
-          <span class="btn btn-close"></span>
-          <span class="btn btn-min"></span>
-          <span class="btn btn-max"></span>
-          <span class="window-title">hermes-agent &bull; hermes-antigravity-bridge &bull; 80x24</span>
-        </div>
-        <div class="content">
-          <div class="line">
-            <span class="prompt">user@host:~$</span> <span class="command">pip install hermes-antigravity-bridge</span>
-          </div>
-          <div class="line tag-gray">
-            Successfully installed hermes-antigravity-bridge-0.1.0
-          </div>
-          <div class="line" style="margin-top: 10px;">
-            <span class="prompt">user@host:~$</span> <span class="command">hermes-antigravity-bridge serve</span>
-          </div>
-          <div class="line">
-            <span class="tag-info">[22:30:10 INFO]</span> <span style="color:#f0f6fc; font-weight:bold;">Hermes Antigravity Bridge v0.1.0</span> starting...
-          </div>
-          <div class="line">
-            <span class="tag-info">[22:30:10 INFO]</span> Security gate: <span class="tag-green">strict fail-closed (--sandbox --mode plan)</span>
-          </div>
-          <div class="line">
-            <span class="tag-info">[22:30:10 INFO]</span> Models discovered: <span class="tag-purple">gemini-3.8-flash</span>, <span class="tag-purple">gemini-3.1-pro</span>
-          </div>
-          <div class="line">
-            <span class="tag-info">[22:30:10 INFO]</span> Bridge listening on <span class="tag-green">http://127.0.0.1:8765</span> &bull; <span class="badge-live">DASHBOARD READY: /dashboard</span>
-          </div>
-          <div class="line" style="margin-top: 12px; border-top: 1px dashed #30363d; padding-top: 10px;">
-            <span class="tag-purple">[Hermes Agent]</span> &lt;stream:open&gt; <span class="tag-green">Typewriter Stream Active (TCP_NODELAY)</span>
-          </div>
-          <div class="line" style="color: #f0f6fc;">
-            <span>Hermes: </span><span>"Antigravity backend connected. Your MEMORY.md and session context are 100% sovereign and secure."</span><span class="cursor"></span>
-          </div>
-          <div class="line tag-gray" style="margin-top: 8px; font-size: 11px;">
-            Throughput: 84 tokens/sec &bull; Ephemeral CWD: auto-cleaned &bull; Concurrency: 1/1 &bull; Errors: 0
-          </div>
-        </div>
-      </div>
-    </div>
-  </foreignObject>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 450" width="800" height="450">
+  <defs>
+    <style>
+      .bg { fill: #0d1117; stroke: #30363d; stroke-width: 1; rx: 10; ry: 10; }
+      .bar { fill: #161b22; rx: 10; ry: 10; }
+      .bar-line { stroke: #30363d; stroke-width: 1; }
+      .title { fill: #8b949e; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; font-size: 13px; font-weight: 500; text-anchor: middle; }
+      .txt { font-family: "SF Mono", "Segoe UI Mono", "Roboto Mono", Menlo, Consolas, monospace; font-size: 13px; }
+      .prompt { fill: #58a6ff; font-weight: 600; }
+      .cmd { fill: #f0f6fc; font-weight: 600; }
+      .gray { fill: #8b949e; }
+      .blue { fill: #58a6ff; }
+      .green { fill: #3fb950; font-weight: 600; }
+      .purple { fill: #bc8cff; font-weight: 600; }
+      .yellow { fill: #d29922; }
+      .white { fill: #f0f6fc; }
+      .cursor { fill: #58a6ff; animation: blink 1s infinite; }
+      @keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+      .card-bg { fill: #161b22; stroke: #30363d; stroke-width: 1; rx: 6; }
+    </style>
+  </defs>
+
+  <!-- Terminal Window Background -->
+  <rect width="800" height="450" class="bg" />
+  <rect width="800" height="40" class="bar" />
+  <line x1="0" y1="40" x2="800" y2="40" class="bar-line" />
+
+  <!-- Window Controls -->
+  <circle cx="20" cy="20" r="6" fill="#ff5f56" />
+  <circle cx="40" cy="20" r="6" fill="#ffbd2e" />
+  <circle cx="60" cy="20" r="6" fill="#27c93f" />
+  <text x="400" y="25" class="title">hermes-agent &#8226; hermes-antigravity-bridge &#8226; 80x24</text>
+
+  <!-- Terminal Body Content -->
+  <!-- Line 1: pip install -->
+  <text x="24" y="75" class="txt"><tspan class="prompt">user@host:~$</tspan> <tspan class="cmd">pip install hermes-antigravity-bridge</tspan></text>
+  <text x="24" y="98" class="txt gray">Successfully installed hermes-antigravity-bridge-0.1.0</text>
+
+  <!-- Line 2: start serve -->
+  <text x="24" y="132" class="txt"><tspan class="prompt">user@host:~$</tspan> <tspan class="cmd">hermes-antigravity-bridge serve</tspan></text>
+  <text x="24" y="156" class="txt"><tspan class="blue">[22:30:10 INFO]</tspan> <tspan class="white" font-weight="bold">Hermes Antigravity Bridge v0.1.0</tspan> starting...</text>
+  <text x="24" y="178" class="txt"><tspan class="blue">[22:30:10 INFO]</tspan> Security gate: <tspan class="green">strict fail-closed (--sandbox --mode plan)</tspan></text>
+  <text x="24" y="200" class="txt"><tspan class="blue">[22:30:10 INFO]</tspan> Models ready: <tspan class="purple">gemini-3.8-flash</tspan>, <tspan class="purple">gemini-3.1-pro</tspan></text>
+  <text x="24" y="222" class="txt"><tspan class="blue">[22:30:10 INFO]</tspan> Bridge listening on <tspan class="green">http://127.0.0.1:8765</tspan> &#8226; <tspan class="green">Dashboard: /dashboard</tspan></text>
+
+  <!-- Separator Line -->
+  <line x1="24" y1="248" x2="776" y2="248" stroke="#30363d" stroke-dasharray="4 4" />
+
+  <!-- Hermes Connection Section -->
+  <text x="24" y="278" class="txt"><tspan class="purple">[Hermes Agent]</tspan> &lt;stream:open&gt; <tspan class="green">Typewriter Stream Active (TCP_NODELAY)</tspan></text>
+  <text x="24" y="306" class="txt"><tspan class="white" font-weight="bold">Hermes:</tspan> <tspan class="white">"Connected to Gemini 3.8 Flash. MEMORY.md verified. Sovereignty: 100%."</tspan></text>
+  <rect x="735" y="293" width="8" height="15" class="cursor" />
+
+  <!-- Metric Badges / Footer Info Card -->
+  <rect x="24" y="340" width="752" height="75" class="card-bg" />
+  <text x="44" y="368" class="txt"><tspan class="gray">TELEMETRY &#8226;</tspan> <tspan class="green">&#9679; ONLINE</tspan> &#8226; <tspan class="blue">Throughput: 84 tokens/sec</tspan> &#8226; <tspan class="yellow">Latency: 3.8ms</tspan></text>
+  <text x="44" y="394" class="txt"><tspan class="gray">ARCHITECTURE &#8226;</tspan> <tspan class="white">Stateless Ephemeral CWD</tspan> &#8226; <tspan class="white">100% Hermes Memory Ownership</tspan> &#8226; <tspan class="green">0 Errors</tspan></text>
 </svg>

@@ -1,11 +1,10 @@
-﻿# Hermes Antigravity Bridge
+# Hermes Antigravity Bridge
 
 <p align="center">
   <a href="https://github.com/usright003-cmyk/hermes-antigravity-bridge/actions"><img src="https://github.com/usright003-cmyk/hermes-antigravity-bridge/actions/workflows/ci.yml/badge.svg" alt="CI Status"></a>
   <img src="https://img.shields.io/badge/python-3.10%2B-blue.svg" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT">
   <img src="https://img.shields.io/badge/dependencies-zero-success.svg" alt="Zero Dependencies">
-  <img src="https://img.shields.io/badge/docker-ready-blue.svg" alt="Docker Ready">
 </p>
 
 A local, authenticated compatibility bridge that lets **Hermes Agent** use advanced models (e.g. Gemini 3.8 Flash, Gemini 3.1 Pro) exposed by the **Google DeepMind Antigravity CLI (`agy`)** via an OpenAI-compatible HTTP interface — while Hermes remains the strict single source of truth for memories, sessions, skills, tools, and continuity.
@@ -18,7 +17,7 @@ A local, authenticated compatibility bridge that lets **Hermes Agent** use advan
 - **Hermes Owns Everything**: Hermes retains full ownership of `USER.md`, `MEMORY.md`, tool execution, skills, and conversation continuity.
 - **Fail-Closed Sandbox Gate**: Antigravity is strictly prevented from executing autonomous internal tools (`--sandbox`, `--mode plan`, `toolPermission: strict`, no allow rules, isolated dedicated home).
 - **Zero Third-Party Dependencies**: Built entirely on standard Python (`http.server`, `subprocess`, `dataclasses`, `json`).
-- **Cross-Platform**: Tested on Linux (systemd & containers), macOS, and Windows.
+- **Cross-Platform Core**: Core Python HTTP bridge & OpenAI API contracts are tested and verified across Linux, macOS, and Windows. (systemd lifecycle automation is Linux-specific).
 
 ---
 
@@ -64,13 +63,7 @@ hermes-antigravity-bridge --config config/config.example.toml models
 hermes-antigravity-bridge --config config/config.example.toml serve
 ```
 
-### Option B: Docker Compose
-
-```bash
-docker compose up -d
-```
-
-### Option C: Production Linux Service (Managed systemd)
+### Option B: Production Linux Service (Managed systemd)
 
 Prepare the isolated environment:
 ```bash
@@ -86,6 +79,14 @@ Install and start the managed systemd user service:
 ```bash
 ./scripts/install.sh
 ```
+
+---
+
+### 💡 Why Native Host Execution (No Docker)?
+
+The Google DeepMind Antigravity CLI (`agy`) is a proprietary host-installed native binary tied directly to your authenticated Google user profile (`~/.gemini`). Running inside an arbitrary container fails because the container does not contain `agy` or its authentication tokens, leading to immediate backend errors.
+
+This bridge is deliberately engineered with **zero third-party dependencies** using standard Python (`http.server`, `subprocess`, `dataclasses`), providing high-performance, zero-overhead execution directly on your host machine (Linux, macOS, or Windows) with strict isolation gates (`--sandbox`, `--mode plan`, dedicated home).
 
 ---
 
@@ -114,6 +115,7 @@ Antigravity CLI is an autonomous agent runtime by design. Running in `--mode pla
 - **Sandboxed Execution**: Calls CLI with `--sandbox` and `--mode plan`.
 - **Ephemeral Temp Directories**: A clean, empty working directory is provisioned for every single turn.
 - **Fail-Closed Stream Monitor**: Aborts immediately if the stream output indicates internal tool invocations.
+- **Strict CLI Version Verification**: Verifies `agy` against validated version signatures. If running a newer or unvalidated CLI version, pass `allow_unvalidated_versions = true` in config to explicitly acknowledge potential protocol differences.
 
 See [SECURITY.md](SECURITY.md) and [docs/security-and-privacy.md](docs/security-and-privacy.md).
 

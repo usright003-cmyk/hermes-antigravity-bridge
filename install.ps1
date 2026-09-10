@@ -107,6 +107,8 @@ if (Test-Path $Desktop) {
     $DesktopBat = "$Desktop\Run-Antigravity-Bridge.bat"
     $DesktopLanBat = "$Desktop\Run-Antigravity-Bridge-LAN.bat"
     $DesktopSilentVbs = "$Desktop\Run-Antigravity-Bridge-Background.vbs"
+    $DesktopLaunchHermes = "$Desktop\Launch-Hermes.bat"
+    $DesktopStopBat = "$Desktop\Stop-Antigravity-Bridge.bat"
 
     # Standard Console Launcher
     $batContent = @"
@@ -157,9 +159,39 @@ WshShell.Run PythonCmd, 0, False
 "@
     Set-Content -Path $DesktopSilentVbs -Value $vbsContent -Encoding ASCII
 
+    # Smart 1-Click Hermes Launcher (auto-starts bridge if needed)
+    $launchHermesContent = @"
+@echo off
+title Hermes AI Assistant
+curl -s -m 1 http://127.0.0.1:8765/health >nul 2>&1
+if %ERRORLEVEL% NEQ 0 (
+    echo [*] Starting Hermes-Antigravity Bridge in background...
+    start "" wscript "%USERPROFILE%\Desktop\Run-Antigravity-Bridge-Background.vbs"
+    timeout /t 3 /nobreak >nul
+)
+echo Launching Hermes...
+hermes %*
+"@
+    Set-Content -Path $DesktopLaunchHermes -Value $launchHermesContent -Encoding ASCII
+
+    # Clean Teardown Script for Background Bridge
+    $stopBatContent = @"
+@echo off
+title Stop Hermes-Antigravity Bridge
+echo Stopping Hermes-Antigravity Bridge daemon...
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8765" ^| findstr "LISTENING"') do (
+    taskkill /PID %%a /F >nul 2>&1
+)
+echo Bridge daemon stopped.
+timeout /t 2 /nobreak >nul
+"@
+    Set-Content -Path $DesktopStopBat -Value $stopBatContent -Encoding ASCII
+
     Write-Host "[+] Desktop launcher created: $DesktopBat" -ForegroundColor Green
     Write-Host "[+] Desktop LAN launcher created: $DesktopLanBat" -ForegroundColor Green
     Write-Host "[+] Desktop background/silent launcher created: $DesktopSilentVbs" -ForegroundColor Green
+    Write-Host "[+] Desktop Smart Hermes launcher created: $DesktopLaunchHermes" -ForegroundColor Green
+    Write-Host "[+] Desktop Stop Bridge launcher created: $DesktopStopBat" -ForegroundColor Green
 }
 
 # Also ensure repository root has all launchers and sync to user profile
@@ -168,11 +200,51 @@ Copy-Item "$InstallDir\run-bridge-lan.bat" "$HOME\run-bridge-lan.bat" -Force -Er
 if (Test-Path "$InstallDir\run-bridge-background.vbs") {
     Copy-Item "$InstallDir\run-bridge-background.vbs" "$HOME\run-bridge-background.vbs" -Force -ErrorAction SilentlyContinue
 }
+if ($DesktopLaunchHermes -and (Test-Path $DesktopLaunchHermes)) {
+    Copy-Item $DesktopLaunchHermes "$HOME\Launch-Hermes.bat" -Force -ErrorAction SilentlyContinue
+}
+if ($DesktopStopBat -and (Test-Path $DesktopStopBat)) {
+    Copy-Item $DesktopStopBat "$HOME\Stop-Antigravity-Bridge.bat" -Force -ErrorAction SilentlyContinue
+}
+
+# 6. Auto-start background bridge daemon immediately
+Write-Host "[*] Ensuring Hermes-Antigravity Bridge background daemon is active..." -ForegroundColor Cyan
+$bridgeListening = $false
+try {
+    $res = Invoke-RestMethod -Uri "http://127.0.0.1:8765/health" -TimeoutSec 1 -ErrorAction SilentlyContinue
+    if ($res.status -eq "ok") { $bridgeListening = $true }
+} catch {}
+
+if (-not $bridgeListening -and $DesktopSilentVbs -and (Test-Path $DesktopSilentVbs)) {
+    Start-Process -FilePath "wscript.exe" -ArgumentList "`"$DesktopSilentVbs`""
+    $retries = 10
+    while ($retries -gt 0 -and -not $bridgeListening) {
+        Start-Sleep -Seconds 1
+        try {
+            $res = Invoke-RestMethod -Uri "http://127.0.0.1:8765/health" -TimeoutSec 2 -ErrorAction Stop
+            if ($res.status -eq "ok") { $bridgeListening = $true }
+        } catch {}
+        $retries--
+    }
+}
+
+if ($bridgeListening) {
+    Write-Host "[+] Bridge daemon is ACTIVE and listening on http://127.0.0.1:8765" -ForegroundColor Green
+} else {
+    Write-Host "[*] Bridge daemon starting in background. Use 'Launch-Hermes.bat' to start chatting." -ForegroundColor Yellow
+}
+
+# 7. Register persistent auto-start on Windows login (Startup folder)
+$StartupDir = [Environment]::GetFolderPath("Startup")
+if ($DesktopSilentVbs -and (Test-Path $StartupDir) -and (Test-Path $DesktopSilentVbs)) {
+    Copy-Item -Path $DesktopSilentVbs -Destination "$StartupDir\hermes-antigravity-bridge.vbs" -Force -ErrorAction SilentlyContinue
+    Write-Host "[+] Configured auto-start on Windows boot: $StartupDir\hermes-antigravity-bridge.vbs" -ForegroundColor Green
+}
 
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host " Setup Complete! You can now run:" -ForegroundColor Green
-Write-Host " 1. Double click 'Run-Antigravity-Bridge.bat' on Desktop (console window)" -ForegroundColor White
-Write-Host " 2. OR double click 'Run-Antigravity-Bridge-Background.vbs' (silent/windowless)" -ForegroundColor White
-Write-Host " 3. (Optional) Run 'Run-Antigravity-Bridge-LAN.bat' to connect from Android/Termux" -ForegroundColor White
-Write-Host " 4. Type 'hermes' in any terminal to start chatting!" -ForegroundColor White
+Write-Host " Setup Complete! Hermes is now connected and ready to chat." -ForegroundColor Green
+Write-Host " -> Bridge daemon is running in the background (Port 8765)." -ForegroundColor White
+Write-Host " -> Type 'hermes' in any terminal to start chatting immediately!" -ForegroundColor White
+Write-Host " -> Or double-click 'Launch-Hermes.bat' on your Desktop." -ForegroundColor White
+Write-Host " -> Automatically starts whenever Windows boots." -ForegroundColor White
 Write-Host "==========================================================" -ForegroundColor Cyan

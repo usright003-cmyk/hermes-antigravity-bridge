@@ -658,24 +658,121 @@ WshShell.Run PythonCmd, 0, False
     return vbs_file
 
 
+def create_launch_hermes_batch(repo_root: Path) -> Path:
+    batch_file = repo_root / "launch-hermes.bat"
+    content = """@echo off
+title Hermes AI Assistant
+curl -s -m 1 http://127.0.0.1:8765/health >nul 2>&1
+if %ERRORLEVEL% NEQ 0 (
+    echo [*] Starting Hermes-Antigravity Bridge in background...
+    if exist "%USERPROFILE%\\Desktop\\Run-Antigravity-Bridge-Background.vbs" (
+        start "" wscript "%USERPROFILE%\\Desktop\\Run-Antigravity-Bridge-Background.vbs"
+    ) else (
+        start "" wscript "%~dp0run-bridge-background.vbs"
+    )
+    timeout /t 3 /nobreak >nul
+)
+echo Launching Hermes...
+hermes %*
+"""
+    batch_file.write_text(content, encoding="utf-8")
+    return batch_file
+
+
+def create_stop_bridge_batch(repo_root: Path) -> Path:
+    batch_file = repo_root / "stop-bridge.bat"
+    content = """@echo off
+title Stop Hermes-Antigravity Bridge
+echo Stopping Hermes-Antigravity Bridge daemon...
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8765" ^| findstr "LISTENING"') do (
+    taskkill /PID %%a /F >nul 2>&1
+)
+echo Bridge daemon stopped.
+timeout /t 2 /nobreak >nul
+"""
+    batch_file.write_text(content, encoding="utf-8")
+    return batch_file
+
+
 def create_desktop_launchers(repo_root: Path) -> list[Path]:
+    create_launcher_batch(repo_root)
+    create_lan_launcher_batch(repo_root)
+    create_background_launcher_vbs(repo_root)
+    create_launch_hermes_batch(repo_root)
+    create_stop_bridge_batch(repo_root)
+
     desktop_dir = get_desktop_dir()
     if not desktop_dir.exists():
         return []
 
     created: list[Path] = []
-    bat = create_launcher_batch(repo_root)
-    lan_bat = create_lan_launcher_batch(repo_root)
-    bg_vbs = create_background_launcher_vbs(repo_root)
+    python_exe = sys.executable
 
-    for src, name in [
-        (bat, "Run-Antigravity-Bridge.bat"),
-        (lan_bat, "Run-Antigravity-Bridge-LAN.bat"),
-        (bg_vbs, "Run-Antigravity-Bridge-Background.vbs"),
-    ]:
+    desktop_files = {
+        "Run-Antigravity-Bridge.bat": f"""@echo off
+title Hermes-Antigravity Bridge (Port 8765)
+echo ====================================================================
+echo   HERMES - ANTIGRAVITY BRIDGE
+echo   1,000,000 Token Native Context ^| Gemini 3.8 Flash (High)
+echo   Listening at: http://127.0.0.1:8765
+echo ====================================================================
+echo.
+cd /d "{repo_root}"
+set PYTHONPATH={repo_root}\\src;%PYTHONPATH%
+"{python_exe}" -m hermes_antigravity_bridge.cli --config "%USERPROFILE%\\.config\\hermes-antigravity-bridge\\config.toml" serve
+pause
+""",
+        "Run-Antigravity-Bridge-LAN.bat": f"""@echo off
+title Hermes-Antigravity Bridge (LAN / Mobile Mode - Port 8765)
+echo ====================================================================
+echo   HERMES - ANTIGRAVITY BRIDGE (LAN & MOBILE TERMUX MODE)
+echo   1,000,000 Token Native Context ^| Multi-Device Network Mode
+echo   Listening at: http://0.0.0.0:8765
+echo ====================================================================
+echo.
+cd /d "{repo_root}"
+set PYTHONPATH={repo_root}\\src;%PYTHONPATH%
+set AGY_BRIDGE_HOST=0.0.0.0
+set AGY_BRIDGE_ALLOW_REMOTE=true
+"{python_exe}" -m hermes_antigravity_bridge.cli --config "%USERPROFILE%\\.config\\hermes-antigravity-bridge\\config.toml" serve
+pause
+""",
+        "Run-Antigravity-Bridge-Background.vbs": f"""' Silent background launcher for Hermes-Antigravity Bridge
+Set WshShell = CreateObject("WScript.Shell")
+WshShell.CurrentDirectory = "{repo_root}"
+Set WshProcessEnv = WshShell.Environment("Process")
+WshProcessEnv("PYTHONPATH") = "{repo_root}\\src"
+UserProfile = WshShell.ExpandEnvironmentStrings("%USERPROFILE%")
+ConfigFile = UserProfile & "\\.config\\hermes-antigravity-bridge\\config.toml"
+PythonCmd = Chr(34) & "{python_exe}" & Chr(34) & " -m hermes_antigravity_bridge.cli --config " & Chr(34) & ConfigFile & Chr(34) & " serve"
+WshShell.Run PythonCmd, 0, False
+""",
+        "Launch-Hermes.bat": """@echo off
+title Hermes AI Assistant
+curl -s -m 1 http://127.0.0.1:8765/health >nul 2>&1
+if %ERRORLEVEL% NEQ 0 (
+    echo [*] Starting Hermes-Antigravity Bridge in background...
+    start "" wscript "%USERPROFILE%\\Desktop\\Run-Antigravity-Bridge-Background.vbs"
+    timeout /t 3 /nobreak >nul
+)
+echo Launching Hermes...
+hermes %*
+""",
+        "Stop-Antigravity-Bridge.bat": """@echo off
+title Stop Hermes-Antigravity Bridge
+echo Stopping Hermes-Antigravity Bridge daemon...
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8765" ^| findstr "LISTENING"') do (
+    taskkill /PID %%a /F >nul 2>&1
+)
+echo Bridge daemon stopped.
+timeout /t 2 /nobreak >nul
+""",
+    }
+
+    for name, content in desktop_files.items():
         dest = desktop_dir / name
         try:
-            shutil.copy2(src, dest)
+            dest.write_text(content, encoding="utf-8")
             created.append(dest)
         except OSError:
             pass
@@ -821,9 +918,8 @@ def main() -> int:
         print("Please run 'agy' in your terminal to complete Google authentication.")
     print("=" * 65)
     print("\nHow to run:")
-    print(f"  1. Double click '{batch_path.name}' to start the bridge on this PC (console).")
-    print(f"     OR double click '{bg_vbs_path.name}' to run silently in the background.")
-    print("  2. Open any terminal and run 'hermes'. Enjoy!")
+    print("  1. Double click 'Launch-Hermes.bat' on Desktop (auto-starts bridge and launches Hermes).")
+    print(f"  2. Or start the bridge silently with '{bg_vbs_path.name}' and run 'hermes' in any terminal.")
     if lan_ip != "127.0.0.1":
         masked_token = (token[:4] + "..." + token[-4:]) if len(token) > 8 else "***"
         print("\n" + "-" * 65)

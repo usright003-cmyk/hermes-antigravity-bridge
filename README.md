@@ -87,9 +87,12 @@ irm https://raw.githubusercontent.com/usright003-cmyk/hermes-antigravity-bridge/
 1. **Prerequisite Discovery & Installation**: Auto-detects Python 3.10+. If Google Antigravity CLI (`agy`) is missing, installs it via Google's official install script (`irm https://antigravity.google/cli/install.ps1 | iex`). If `hermes` is missing, auto-installs `hermes-agent`.
 2. **Dual-Mode Guided Authentication**: If already signed in, connects in 1 second. If not yet authenticated, launches your browser or prints the Google OAuth link for terminal verification.
 3. **Non-Destructive Coexistence**: Connects Antigravity (`gemini-3.8-flash` 1M context) as Hermes's primary provider while cleanly preserving all your existing providers (OpenAI, Claude, Groq, Ollama) in `fallback_providers`.
-4. **Three Desktop Launchers Created**:
-   * 🔕 **`Run-Antigravity-Bridge-Background.vbs` (Silent Background Launcher)**: Starts the bridge process in the background with **zero black console window** or popup clutter. Perfect for daily coding sessions!
+4. **Auto-Start & Boot Persistence**: The bridge automatically starts running silently in the background upon installation and registers in Windows Startup so it persists across reboots. You can type `hermes` immediately in any terminal!
+5. **Desktop Launchers Created**:
+   * ⚡ **`Launch-Hermes.bat` (Smart 1-Click Launcher)**: Checks if the bridge is running (starts it silently if needed) and drops you straight into Hermes.
+   * 🔕 **`Run-Antigravity-Bridge-Background.vbs` (Silent Background Launcher)**: Starts the bridge in the background with **zero black console window**.
    * 🖥️ **`Run-Antigravity-Bridge.bat` (Console Launcher)**: Standard launcher opening a console window with live token throughput and request logging.
+   * 🛑 **`Stop-Antigravity-Bridge.bat` (Teardown Script)**: Cleanly stops the background daemon when needed.
    * 🌐 **`Run-Antigravity-Bridge-LAN.bat` (Multi-Device / Mobile Mode)**: Binds to `0.0.0.0:8765` so your Android phone or local network devices can connect over Wi-Fi.
 
 ---

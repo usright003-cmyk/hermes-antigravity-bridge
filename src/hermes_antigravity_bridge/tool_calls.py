@@ -14,7 +14,7 @@ from .errors import InvalidToolCall
 
 _LOG = logging.getLogger(__name__)
 
-_TOOL_TAG_START_RE = re.compile(r"<tool_call>", re.IGNORECASE)
+_TOOL_TAG_START_RE = re.compile(r"<tool_call(?:\s+[^>]*)?>", re.IGNORECASE)
 _TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _MAX_TOOL_CALLS = 16
 _MAX_BLOCK_CHARS = 65_536
@@ -141,10 +141,10 @@ def parse_tool_calls(
             tag_end = close_idx + len("</tool_call>")
         else:
             # Unclosed tag at end of message or before next tag
-            next_tag = text.lower().find("<tool_call>", inner_start)
-            if next_tag != -1:
-                block_content = text[inner_start:next_tag]
-                tag_end = next_tag
+            next_tag_match = _TOOL_TAG_START_RE.search(text, inner_start)
+            if next_tag_match is not None:
+                block_content = text[inner_start:next_tag_match.start()]
+                tag_end = next_tag_match.start()
             else:
                 block_content = text[inner_start:]
                 tag_end = len(text)
@@ -213,7 +213,12 @@ def parse_tool_calls(
                     raise InvalidToolCall("tool-call arguments must decode to a JSON object")
                 _LOG.warning("Tool-call arguments do not decode to a JSON object; skipping")
                 continue
-            argument_text = arguments
+            argument_text = json.dumps(parsed_arguments, ensure_ascii=False, separators=(",", ":"))
+            if len(argument_text) > _MAX_ARGUMENT_CHARS:
+                if mode == "strict":
+                    raise InvalidToolCall("tool-call arguments exceed the configured limit")
+                _LOG.warning("Tool-call arguments exceed size limit; skipping")
+                continue
         elif isinstance(arguments, dict):
             argument_text = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
             if len(argument_text) > _MAX_ARGUMENT_CHARS:

@@ -110,6 +110,24 @@ class ToolCallAdapterTests(unittest.TestCase):
         self.assertEqual(result.text, text)
         self.assertEqual(result.tool_calls, ())
 
+    def test_repaired_json_string_arguments_are_not_discarded(self):
+        text = '<tool_call>{"name": "save_data", "arguments": "{\\"action\\": \\"save\\",}"}</tool_call>'
+        result = parse_tool_calls(text, allowed_tool_names={"save_data"})
+        self.assertEqual(len(result.tool_calls), 1)
+        raw_args = result.tool_calls[0]["function"]["arguments"]
+        self.assertEqual(raw_args, '{"action":"save"}')
+        self.assertEqual(json.loads(raw_args), {"action": "save"})
+
+    def test_parses_tool_call_tag_with_attributes_and_whitespace(self):
+        text = (
+            '<tool_call id="1" type="function">{"name": "save_data", "arguments": {"x": 1}}</tool_call>\n'
+            '<tool_call   whitespace>{"name": "save_data", "arguments": {"x": 2}}</tool_call>'
+        )
+        result = parse_tool_calls(text, allowed_tool_names={"save_data"})
+        self.assertEqual(len(result.tool_calls), 2)
+        self.assertEqual(json.loads(result.tool_calls[0]["function"]["arguments"]), {"x": 1})
+        self.assertEqual(json.loads(result.tool_calls[1]["function"]["arguments"]), {"x": 2})
+
 
 if __name__ == "__main__":
     unittest.main()

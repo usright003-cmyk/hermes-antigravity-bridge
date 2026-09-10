@@ -37,6 +37,22 @@ _ALLOWED_FIELDS = {
 _ALLOWED_ROLES = {"system", "developer", "user", "assistant", "tool"}
 
 
+def _extract_unstreamed_text(full_text: str, streamed_text: str) -> str:
+    full_stripped = full_text.strip()
+    streamed_stripped = streamed_text.strip()
+    if not streamed_stripped:
+        return full_text
+    if full_stripped == streamed_stripped:
+        return ""
+    if full_stripped.startswith(streamed_stripped):
+        remainder = full_stripped[len(streamed_stripped):]
+        streamed_trailing = streamed_text[len(streamed_text.rstrip()):]
+        if streamed_trailing and remainder.startswith(streamed_trailing):
+            remainder = remainder[len(streamed_trailing):]
+        return remainder
+    return full_text.removeprefix(streamed_text)
+
+
 class ChatCompletionService:
     def __init__(
         self,
@@ -297,15 +313,16 @@ class ChatCompletionService:
                         )
                     except InvalidToolCall as exc:
                         _LOG.warning("tool call parse failed in stream: %s; degrading to text", exc)
-                        raw = backend_response.response
-                        unstreamed = raw.removeprefix(streamed_text)
-                        if unstreamed:
-                            yield {
-                                "type": "delta",
-                                "content": unstreamed,
-                                "requested_model": requested,
-                                "actual_model": actual_model,
-                            }
+                        if has_tool_call_start:
+                            raw = backend_response.response
+                            unstreamed = _extract_unstreamed_text(raw, streamed_text)
+                            if unstreamed:
+                                yield {
+                                    "type": "delta",
+                                    "content": unstreamed,
+                                    "requested_model": requested,
+                                    "actual_model": actual_model,
+                                }
                         yield {
                             "type": "finish",
                             "finish_reason": "stop",
@@ -344,8 +361,8 @@ class ChatCompletionService:
                             "actual_model": actual_model,
                         }
                     else:
-                        if parsed.text:
-                            unstreamed = parsed.text.removeprefix(streamed_text)
+                        if has_tool_call_start and parsed.text:
+                            unstreamed = _extract_unstreamed_text(parsed.text, streamed_text)
                             if unstreamed:
                                 yield {
                                     "type": "delta",

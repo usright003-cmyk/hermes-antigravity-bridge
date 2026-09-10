@@ -80,9 +80,12 @@ _TOOL_KEYS = {
 def parse_model_ids(output: str) -> tuple[str, ...]:
     ids: list[str] = []
     for line in (output or "").splitlines():
-        parts = line.strip().split("\t", 1)
-        model_id = parts[0].strip() if len(parts) == 2 else ""
-        if model_id and model_id not in ids and not model_id.lower().startswith("fetching "):
+        line = line.strip()
+        if not line or line.lower().startswith("fetching "):
+            continue
+        parts = line.split("\t", 1)
+        model_id = parts[0].strip()
+        if model_id and model_id not in ids:
             ids.append(model_id)
     return tuple(ids)
 
@@ -335,7 +338,7 @@ class AntigravityBackend:
                     env=self._base_environment(),
                     capture_output=True,
                     text=True,
-                    timeout=min(self.config.timeout_seconds, 3),
+                    timeout=min(self.config.timeout_seconds, 15),
                     check=False,
                 )
                 models = parse_model_ids(completed.stdout) if completed.returncode == 0 else ()

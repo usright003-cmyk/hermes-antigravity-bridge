@@ -311,6 +311,16 @@ class AntigravityBackendTests(unittest.TestCase):
                 self.assertIn("reason", readiness)
                 self.assertIn("fallback", readiness["reason"])
 
+    def test_model_discovery_uses_15_second_timeout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = self.make_backend(Path(tmp), timeout_seconds=30)
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value.returncode = 0
+                mock_run.return_value.stdout = "gemini-3.1-pro-high\tGemini 3.1 Pro High\n"
+                models = backend.list_models(force_refresh=True)
+                self.assertEqual(models, ("gemini-3.1-pro-high",))
+                self.assertEqual(mock_run.call_args.kwargs["timeout"], 15)
+
 
 if __name__ == "__main__":
     unittest.main()

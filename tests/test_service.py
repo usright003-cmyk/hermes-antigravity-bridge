@@ -283,6 +283,128 @@ class ChatCompletionServiceTests(unittest.TestCase):
         self.assertTrue(any(e.get("content") == "OK" for e in events))
         self.assertEqual(non_stream_calls["count"], 2)
 
+    def test_complete_stream_multi_token_trailing_newlines_no_duplicate(self):
+        chunks = ["Hello,\n", "world!\n", "How are you doing today?\n"]
+        backend = StreamingFakeBackend(
+            chunks=chunks,
+            final_response="Hello,\nworld!\nHow are you doing today?",
+        )
+        service = ChatCompletionService(
+            backend=backend,
+            prompt_builder=HermesPromptBuilder(),
+            prompt_budget=PromptBudget(),
+        )
+        events = list(service.complete_stream({
+            "model": "model-a",
+            "stream": True,
+            "messages": [{"role": "user", "content": "hello"}],
+        }))
+        deltas = [e["content"] for e in events if e.get("type") == "delta"]
+        # Must yield exactly the original streamed chunks, NO duplicate trailing unstreamed delta
+        self.assertEqual(deltas, chunks)
+        full_text = "".join(deltas)
+        self.assertEqual(full_text, "Hello,\nworld!\nHow are you doing today?\n")
+        finish = next(e for e in events if e.get("type") == "finish")
+        self.assertEqual(finish["finish_reason"], "stop")
+        self.assertEqual(finish["usage"]["total_tokens"], 15)
+
+    def test_complete_stream_no_tool_call_single_token_newlines(self):
+        chunks = ["line1\n\n", "line2\n\n", "line3\n"]
+        backend = StreamingFakeBackend(
+            chunks=chunks,
+            final_response="line1\n\nline2\n\nline3",
+        )
+        service = ChatCompletionService(
+            backend=backend,
+            prompt_builder=HermesPromptBuilder(),
+            prompt_budget=PromptBudget(),
+        )
+        events = list(service.complete_stream({
+            "model": "model-a",
+            "stream": True,
+            "messages": [{"role": "user", "content": "hi"}],
+        }))
+        deltas = [e["content"] for e in events if e.get("type") == "delta"]
+        self.assertEqual(deltas, chunks)
+
+    def test_complete_stream_with_tool_call_extracts_cleanly(self):
+        chunks = [
+            "I will call the tool.\n",
+            '<tool_call>{"name": "memory", "arguments": {"action": "add"}}</tool_call>',
+        ]
+        backend = StreamingFakeBackend(
+            chunks=chunks,
+            final_response="I will call the tool.\n<tool_call>{\"name\": \"memory\", \"arguments\": {\"action\": \"add\"}}</tool_call>",
+        )
+        service = ChatCompletionService(
+            backend=backend,
+            prompt_builder=HermesPromptBuilder(),
+            prompt_budget=PromptBudget(),
+        )
+        events = list(service.complete_stream({
+            "model": "model-a",
+            "stream": True,
+            "messages": [{"role": "user", "content": "remember"}],
+            "tools": [{"type": "function", "function": {"name": "memory", "parameters": {"type": "object"}}}],
+        }))
+        deltas = [e["content"] for e in events if e.get("type") == "delta"]
+        self.assertEqual(deltas, ["I will call the tool.\n"])
+        tc_event = next(e for e in events if e.get("type") == "tool_calls")
+        self.assertEqual(tc_event["tool_calls"][0]["function"]["name"], "memory")
+        finish = next(e for e in events if e.get("type") == "finish")
+        self.assertEqual(finish["finish_reason"], "tool_calls")
+
+    def test_complete_stream_with_unstreamed_text_after_skipped_tool_call(self):
+        chunks = [
+            "Before tag.\n",
+            '<tool_call>{"name": "unadvertised", "arguments": {}}</tool_call>\nAfter tag.',
+        ]
+        backend = StreamingFakeBackend(
+            chunks=chunks,
+            final_response="Before tag.\n<tool_call>{\"name\": \"unadvertised\", \"arguments\": {}}</tool_call>\nAfter tag.",
+        )
+        service = ChatCompletionService(
+            backend=backend,
+            prompt_builder=HermesPromptBuilder(),
+            prompt_budget=PromptBudget(),
+            tool_call_mode="compatible",
+        )
+        events = list(service.complete_stream({
+            "model": "model-a",
+            "stream": True,
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"type": "function", "function": {"name": "other_tool"}}],
+        }))
+        deltas = [e["content"] for e in events if e.get("type") == "delta"]
+        self.assertEqual(deltas[0], "Before tag.\n")
+        combined = "".join(deltas)
+        self.assertNotIn("Before tag.\nBefore tag.", combined)
+        self.assertIn("After tag.", combined)
+
+
+class StreamingFakeBackend(FakeBackend):
+    def __init__(self, chunks, final_response=None, usage=None):
+        super().__init__()
+        self.chunks = chunks
+        self.final_response = (
+            final_response if final_response is not None else "".join(chunks).strip()
+        )
+        self.usage = usage or {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
+
+    def generate_stream(self, prompt, model, **kwargs):
+        self.prompts.append((prompt, model))
+        for chunk in self.chunks:
+            yield {"type": "delta", "content": chunk}
+        yield {
+            "type": "result",
+            "response": BackendResponse(
+                response=self.final_response,
+                model=model,
+                usage=self.usage,
+                duration_seconds=0.1,
+            ),
+        }
+
 
 if __name__ == "__main__":
     unittest.main()

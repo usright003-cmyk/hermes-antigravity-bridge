@@ -1,0 +1,164 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 590" width="1060" height="590">
+  <defs>
+    <style>
+      .bg { fill: #0d1117; stroke: #30363d; stroke-width: 1.5; rx: 12; ry: 12; }
+      .header-bar { fill: #161b22; rx: 12; ry: 12; }
+      .title { fill: #f0f6fc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 15px; font-weight: 600; text-anchor: middle; }
+      .subtitle { fill: #8b949e; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 11.5px; text-anchor: middle; }
+      
+      .lifeline { stroke: #30363d; stroke-width: 1.5; stroke-dasharray: 6 5; }
+      .actor-box { fill: #161b22; stroke-width: 1.8; rx: 8; ry: 8; }
+      .box-user { stroke: #58a6ff; }
+      .box-hermes { stroke: #bc8cff; }
+      .box-db { stroke: #3fb950; }
+      .box-bridge { stroke: #d29922; }
+      .box-model { stroke: #f778ba; }
+      
+      .actor-title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 12px; font-weight: 700; text-anchor: middle; }
+      
+      .msg-text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 11px; fill: #c9d1d9; }
+      .msg-quote { font-family: "SF Mono", "Segoe UI Mono", Menlo, monospace; font-size: 11px; fill: #79c0ff; font-weight: 600; }
+      .badge-text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 10px; font-weight: 700; fill: #ffffff; text-anchor: middle; }
+      
+      .arrow-blue { stroke: #58a6ff; stroke-width: 1.8; stroke-linecap: round; }
+      .arrow-green { stroke: #3fb950; stroke-width: 1.8; stroke-linecap: round; }
+      .arrow-dashed-green { stroke: #3fb950; stroke-width: 1.8; stroke-dasharray: 5 4; stroke-linecap: round; }
+      .arrow-gold { stroke: #d29922; stroke-width: 1.8; stroke-linecap: round; }
+      .arrow-purple { stroke: #bc8cff; stroke-width: 1.8; stroke-linecap: round; }
+      .arrow-dashed-purple { stroke: #bc8cff; stroke-width: 1.8; stroke-dasharray: 5 4; stroke-linecap: round; }
+      
+      .dot-red { fill: #ff5f56; }
+      .dot-yellow { fill: #ffbd2e; }
+      .dot-green { fill: #27c93f; }
+      
+      .footer-banner { fill: #161b22; stroke: #238636; stroke-width: 1.5; rx: 8; ry: 8; }
+      .footer-text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 11.5px; fill: #7ee787; font-weight: 600; text-anchor: middle; }
+    </style>
+    
+    <marker id="m-blue" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#58a6ff" />
+    </marker>
+    <marker id="m-green" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3fb950" />
+    </marker>
+    <marker id="m-gold" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#d29922" />
+    </marker>
+    <marker id="m-purple" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#bc8cff" />
+    </marker>
+  </defs>
+
+  <!-- Background Canvas -->
+  <rect width="1060" height="590" class="bg" />
+  
+  <!-- Header Bar -->
+  <rect width="1060" height="44" class="header-bar" />
+  <circle cx="22" cy="22" r="6" class="dot-red" />
+  <circle cx="42" cy="22" r="6" class="dot-yellow" />
+  <circle cx="62" cy="22" r="6" class="dot-green" />
+  <text x="530" y="24" class="title">🧠 Memory Recall Lifecycle: Long-Term Context &amp; Local Persistence</text>
+  <text x="530" y="38" class="subtitle">1,000,000-Token Native Context &#8226; Local SQLite Sovereignty (memory.db) &#8226; Instant Model Switching</text>
+
+  <!-- Lifelines:
+       User: 80
+       Hermes: 320
+       DB: 540
+       Bridge: 740
+       Model: 970
+  -->
+  <line x1="80" y1="102" x2="80" y2="485" class="lifeline" />
+  <line x1="320" y1="102" x2="320" y2="485" class="lifeline" />
+  <line x1="540" y1="102" x2="540" y2="485" class="lifeline" />
+  <line x1="740" y1="102" x2="740" y2="485" class="lifeline" />
+  <line x1="970" y1="102" x2="970" y2="485" class="lifeline" />
+
+  <!-- Top Actor Boxes -->
+  <!-- User -->
+  <rect x="30" y="65" width="100" height="38" class="actor-box box-user" />
+  <text x="80" y="89" class="actor-title" fill="#58a6ff">👤 User</text>
+
+  <!-- Hermes Agent -->
+  <rect x="245" y="65" width="150" height="38" class="actor-box box-hermes" />
+  <text x="320" y="89" class="actor-title" fill="#bc8cff">🤖 Hermes Agent</text>
+
+  <!-- Local SQLite -->
+  <rect x="460" y="65" width="160" height="38" class="actor-box box-db" />
+  <text x="540" y="89" class="actor-title" fill="#3fb950">💾 Local Disk (memory.db)</text>
+
+  <!-- Bridge -->
+  <rect x="660" y="65" width="160" height="38" class="actor-box box-bridge" />
+  <text x="740" y="89" class="actor-title" fill="#d29922">⚡ Bridge (Port 8765)</text>
+
+  <!-- Antigravity / Gemini -->
+  <rect x="885" y="65" width="170" height="38" class="actor-box box-model" />
+  <text x="970" y="89" class="actor-title" fill="#f778ba">☁️ Gemini 3.8 / Claude</text>
+
+  <!-- Sequence Step 1: User -> Hermes -->
+  <circle cx="80" cy="135" r="9" fill="#1f6feb" />
+  <text x="80" y="139" class="badge-text">1</text>
+  <line x1="90" y1="135" x2="310" y2="135" class="arrow-blue" marker-end="url(#m-blue)" />
+  <text x="95" y="126" class="msg-quote">"Do you remember the database design we did last week?"</text>
+
+  <!-- Sequence Step 2: Hermes -> SQLite -->
+  <circle cx="320" cy="180" r="9" fill="#238636" />
+  <text x="320" y="184" class="badge-text">2</text>
+  <line x1="330" y1="180" x2="530" y2="180" class="arrow-green" marker-end="url(#m-green)" />
+  <text x="338" y="172" class="msg-text">Search persistent sqlite memory store</text>
+
+  <!-- Sequence Step 3: SQLite -> Hermes -->
+  <circle cx="540" cy="225" r="9" fill="#238636" />
+  <text x="540" y="229" class="badge-text">3</text>
+  <line x1="530" y1="225" x2="330" y2="225" class="arrow-dashed-green" marker-end="url(#m-green)" />
+  <text x="338" y="217" class="msg-text">Return past conversation &amp; facts</text>
+
+  <!-- Sequence Step 4: Hermes -> Bridge -->
+  <circle cx="320" cy="270" r="9" fill="#9e6a03" />
+  <text x="320" y="274" class="badge-text">4</text>
+  <line x1="330" y1="270" x2="730" y2="270" class="arrow-gold" marker-end="url(#m-gold)" />
+  <text x="345" y="262" class="msg-text"><tspan fill="#e3b341" font-weight="600">Send Prompt + 1M Context</tspan> + Recalled Memories</text>
+
+  <!-- Sequence Step 5: Bridge -> Model -->
+  <circle cx="740" cy="315" r="9" fill="#9e6a03" />
+  <text x="740" y="319" class="badge-text">5</text>
+  <line x1="750" y1="315" x2="960" y2="315" class="arrow-gold" marker-end="url(#m-gold)" />
+  <text x="752" y="307" class="msg-text">Execute turn with <tspan fill="#58a6ff" font-weight="600">1,000,000-token</tspan> budget</text>
+
+  <!-- Sequence Step 6: Model -> Bridge -->
+  <circle cx="970" cy="360" r="9" fill="#8957e5" />
+  <text x="970" y="364" class="badge-text">6</text>
+  <line x1="960" y1="360" x2="750" y2="360" class="arrow-dashed-purple" marker-end="url(#m-purple)" />
+  <text x="752" y="352" class="msg-text">Generated Response (using <tspan fill="#bc8cff" font-weight="600">recalled facts</tspan>)</text>
+
+  <!-- Sequence Step 7: Bridge -> Hermes -->
+  <circle cx="740" cy="405" r="9" fill="#8957e5" />
+  <text x="740" y="409" class="badge-text">7</text>
+  <line x1="730" y1="405" x2="330" y2="405" class="arrow-dashed-purple" marker-end="url(#m-purple)" />
+  <text x="380" y="397" class="msg-text">Stream typewriter tokens back</text>
+
+  <!-- Sequence Step 8: Hermes -> User -->
+  <circle cx="320" cy="450" r="9" fill="#1f6feb" />
+  <text x="320" y="454" class="badge-text">8</text>
+  <line x1="310" y1="450" x2="90" y2="450" class="arrow-blue" marker-end="url(#m-blue)" />
+  <text x="95" y="442" class="msg-quote">"Yes! Last week we designed the user schema..."</text>
+
+  <!-- Bottom Actor Boxes -->
+  <rect x="30" y="475" width="100" height="34" class="actor-box box-user" />
+  <text x="80" y="497" class="actor-title" fill="#58a6ff">👤 User</text>
+
+  <rect x="245" y="475" width="150" height="34" class="actor-box box-hermes" />
+  <text x="320" y="497" class="actor-title" fill="#bc8cff">🤖 Hermes Agent</text>
+
+  <rect x="460" y="475" width="160" height="34" class="actor-box box-db" />
+  <text x="540" y="497" class="actor-title" fill="#3fb950">💾 Local Disk (memory.db)</text>
+
+  <rect x="660" y="475" width="160" height="34" class="actor-box box-bridge" />
+  <text x="740" y="497" class="actor-title" fill="#d29922">⚡ Bridge (Port 8765)</text>
+
+  <rect x="885" y="475" width="170" height="34" class="actor-box box-model" />
+  <text x="970" y="497" class="actor-title" fill="#f778ba">☁️ Gemini 3.8 / Claude</text>
+
+  <!-- Footer Banner -->
+  <rect x="30" y="528" width="1000" height="42" class="footer-banner" />
+  <text x="530" y="554" class="footer-text">🔒 Cognitive Sovereignty: Memories stay locally on your disk (memory.db) forever &#8226; Changing models never forgets your past work!</text>
+</svg>

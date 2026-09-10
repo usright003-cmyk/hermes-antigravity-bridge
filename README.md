@@ -169,24 +169,9 @@ If you prefer to keep the bridge running on your home PC or cloud VPS and use Te
 
 A common question is: *If I use Google's Antigravity models, how does Hermes retain memory over weeks or months?*
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor User as 👤 User
-    participant Hermes as 🤖 Hermes Agent
-    participant DB as 💾 Local Disk (memory.db)
-    participant Bridge as ⚡ Bridge (Port 8765)
-    participant Model as ☁️ Gemini 3.8 / Claude
-
-    User->>Hermes: "Do you remember the database design we did last week?"
-    Hermes->>DB: Search persistent sqlite memory store
-    DB-->>Hermes: Return past conversation & facts
-    Hermes->>Bridge: Send Prompt + 1M Context + Recalled Memories
-    Bridge->>Model: Execute turn with 1,000,000-token budget
-    Model-->>Bridge: Generated Response (using recalled facts)
-    Bridge-->>Hermes: Stream typewriter tokens back
-    Hermes-->>User: "Yes! Last week we designed the user schema..."
-```
+<p align="center">
+  <img src="assets/memory-recall-flow.svg" alt="Hermes Memory Recall & Sovereignty Lifecycle" width="940">
+</p>
 
 1. **Persistent Memory Ownership**: Hermes maintains your memories, user profile (`USER.md`), and session history on your local machine (`memory.db`). They are never lost when changing models.
 2. **Infinite Recall**: Thanks to the **1,000,000 token context window**, Hermes can load expansive memory files, past code snapshots, and active skills without running out of tokens or suffering context degradation.

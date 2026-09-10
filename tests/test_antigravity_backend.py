@@ -217,10 +217,24 @@ class AntigravityBackendTests(unittest.TestCase):
             (user_cli / "jetski_state.pbtxt").write_text("token: new_auth_token\n", encoding="utf-8")
             (user_cli / "installation_id").write_text("inst-999\n", encoding="utf-8")
 
+            # 1. Default: sync_user_credentials=False does NOT copy auth tokens
+            isolated_home_default = tmp_path / "isolated_home_default"
+            backend_default = self.make_backend(
+                tmp_path / "runtime1",
+                home=isolated_home_default,
+                sync_user_credentials=False,
+            )
+            with patch("pathlib.Path.home", return_value=tmp_path / "user_home"):
+                self.assertFalse(backend_default.is_authenticated())
+                synced_jetski = isolated_home_default / ".gemini" / "antigravity-cli" / "jetski_state.pbtxt"
+                self.assertFalse(synced_jetski.exists())
+
+            # 2. Opt-in: sync_user_credentials=True copies auth tokens securely
             isolated_home = tmp_path / "isolated_home"
             backend = self.make_backend(
-                tmp_path / "runtime",
+                tmp_path / "runtime2",
                 home=isolated_home,
+                sync_user_credentials=True,
             )
             with patch("pathlib.Path.home", return_value=tmp_path / "user_home"):
                 self.assertTrue(backend.is_authenticated())

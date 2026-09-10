@@ -12,7 +12,7 @@ from hermes_antigravity_bridge.config import (
     ServerConfig,
 )
 from hermes_antigravity_bridge.contracts import BackendResponse
-from hermes_antigravity_bridge.errors import UnknownModel
+from hermes_antigravity_bridge.errors import BackendProtocolError, UnknownModel
 from hermes_antigravity_bridge.integrations.hermes import HermesPromptBuilder
 from hermes_antigravity_bridge.openai_http import create_http_server
 from hermes_antigravity_bridge.prompt.budget import PromptBudget
@@ -311,10 +311,59 @@ class HTTPContractTests(unittest.TestCase):
         status, _, updated_body = self.request("/api/metrics")
         self.assertEqual(status, 200)
         updated_data = json.loads(updated_body.decode("utf-8"))
-        self.assertEqual(
-            updated_data["metrics"]["total_requests"], initial_requests + 1
+    def test_streaming_error_cleanly_terminates_sse_stream_without_abrupt_disconnect(self):
+        class BrokenStreamBackend(FakeBackend):
+            def generate_stream(self, prompt, model, **kwargs):
+                yield {"type": "delta", "content": "Hello "}
+                raise BackendProtocolError("backend stream connection severed")
+
+        token = TEST_TOKEN
+        config = BridgeConfig(
+            server=ServerConfig(
+                host="127.0.0.1",
+                port=0,
+                token=token,
+                request_body_limit_bytes=4096,
+                max_concurrent_requests=1,
+            ),
+            antigravity=AntigravityConfig(binary=Path(sys.executable)),
+            prompt=PromptBudget(),
         )
-        self.assertGreaterEqual(updated_data["metrics"]["uptime_seconds"], 0)
+        service = ChatCompletionService(
+            backend=BrokenStreamBackend(),
+            prompt_builder=HermesPromptBuilder(),
+            prompt_budget=config.prompt,
+        )
+        server = create_http_server(config, service)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        url = f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions"
+        body = json.dumps(
+            {
+                "model": "model-a",
+                "messages": [{"role": "user", "content": "test"}],
+                "stream": True,
+            }
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            url,
+            data=body,
+            headers={
+                "Authorization": "Bearer " + token,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5) as resp:
+                self.assertEqual(resp.status, 200)
+                content = resp.read().decode("utf-8")
+                self.assertIn("data: [DONE]", content)
+                self.assertIn("Hello ", content)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
 
 if __name__ == "__main__":

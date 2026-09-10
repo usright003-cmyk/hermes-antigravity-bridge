@@ -188,21 +188,28 @@ class AntigravityBackend:
             except OSError as exc:
                 _LOG.warning("could not auto-create isolated settings.json: %s", exc)
 
-        # 2. Auto-sync authentication state from user profile if missing or newer
-        try:
-            user_cli = Path.home() / ".gemini" / "antigravity-cli"
-            if user_cli.exists() and user_cli.resolve() != cli_dir.resolve():
-                for filename in ("installation_id", "jetski_state.pbtxt"):
-                    src = user_cli / filename
-                    dst = cli_dir / filename
-                    if src.is_file() and src.stat().st_size > 0:
-                        try:
-                            if not dst.exists() or src.stat().st_mtime > dst.stat().st_mtime:
-                                shutil.copy2(src, dst)
-                        except OSError as exc:
-                            _LOG.debug("could not auto-sync %s: %s", filename, exc)
-        except OSError as exc:
-            _LOG.debug("credentials auto-sync error: %s", exc)
+        # 2. Sync authentication state from user profile only if opt-in enabled
+        if self.config.sync_user_credentials:
+            try:
+                user_cli = Path.home() / ".gemini" / "antigravity-cli"
+                if user_cli.exists() and user_cli.resolve() != cli_dir.resolve():
+                    for filename in ("installation_id", "jetski_state.pbtxt"):
+                        src = user_cli / filename
+                        dst = cli_dir / filename
+                        if src.is_file() and src.stat().st_size > 0:
+                            try:
+                                if not dst.exists() or src.stat().st_mtime > dst.stat().st_mtime:
+                                    shutil.copy2(src, dst)
+                                    if os.name == "posix":
+                                        try:
+                                            os.chmod(dst, 0o600)
+                                        except OSError:
+                                            pass
+                            except OSError as exc:
+                                _LOG.debug("could not copy auth file: %s", exc)
+                    _LOG.info("User credentials synchronized to isolated profile (opt-in enabled).")
+            except OSError as exc:
+                _LOG.debug("credentials auto-sync error: %s", exc)
 
     def _base_environment(self) -> dict[str, str]:
         self._sync_credentials_and_settings()
@@ -221,13 +228,10 @@ class AntigravityBackend:
         return runtime
 
     def is_authenticated(self) -> bool:
-        """Check if Google Antigravity credentials exist."""
+        """Check if Google Antigravity credentials exist in the active profile."""
         self._sync_credentials_and_settings()
-        candidates = [
-            self.config.home / ".gemini" / "antigravity-cli" / "jetski_state.pbtxt",
-            Path.home() / ".gemini" / "antigravity-cli" / "jetski_state.pbtxt",
-        ]
-        return any(p.is_file() and p.stat().st_size > 0 for p in candidates)
+        target = self.config.home / ".gemini" / "antigravity-cli" / "jetski_state.pbtxt"
+        return target.is_file() and target.stat().st_size > 0
 
     @property
     def model_source(self) -> str:
@@ -441,6 +445,10 @@ class AntigravityBackend:
             "*" in self.config.validated_versions
             or version in self.config.validated_versions
         )
+        if "*" in self.config.validated_versions:
+            _LOG.warning(
+                "Wildcard version validation is active; Antigravity CLI version safety enforcement is bypassed."
+            )
         if not is_validated:
             if not self.config.allow_unvalidated_versions:
                 raise BackendProtocolError(

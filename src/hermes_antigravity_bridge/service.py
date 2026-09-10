@@ -44,10 +44,12 @@ class ChatCompletionService:
         backend: TextBackend,
         prompt_builder: HermesPromptBuilder,
         prompt_budget: PromptBudget,
+        tool_call_mode: str = "compatible",
     ) -> None:
         self.backend = backend
         self.prompt_builder = prompt_builder
         self.prompt_budget = prompt_budget
+        self.tool_call_mode = tool_call_mode
 
     def _validate_messages(self, value: Any) -> list[dict[str, Any]]:
         if not isinstance(value, list) or not value:
@@ -125,13 +127,42 @@ class ChatCompletionService:
             raise InvalidRequest("reasoning_effort is invalid")
         if body.get("n", 1) not in (None, 1):
             raise InvalidRequest("only n=1 is supported")
-        max_tokens = body.get("max_tokens")
-        if max_tokens is not None and (
-            isinstance(max_tokens, bool)
-            or not isinstance(max_tokens, int)
-            or max_tokens < 1
-        ):
-            raise InvalidRequest("max_tokens must be a positive integer")
+        for token_field in ("max_tokens", "max_completion_tokens"):
+            token_val = body.get(token_field)
+            if token_val is not None and (
+                isinstance(token_val, bool)
+                or not isinstance(token_val, int)
+                or token_val < 1
+            ):
+                raise InvalidRequest(f"{token_field} must be a positive integer")
+
+        seed = body.get("seed")
+        if seed is not None:
+            if isinstance(seed, bool) or not isinstance(seed, int):
+                raise InvalidRequest("seed must be an integer")
+            _LOG.debug("request specified seed=%d (accepted for OpenAI compatibility)", seed)
+
+        parallel_tool_calls = body.get("parallel_tool_calls")
+        if parallel_tool_calls is not None:
+            if not isinstance(parallel_tool_calls, bool):
+                raise InvalidRequest("parallel_tool_calls must be a boolean")
+            _LOG.debug("request specified parallel_tool_calls=%s", parallel_tool_calls)
+
+        for penalty_name in ("presence_penalty", "frequency_penalty"):
+            penalty_val = body.get(penalty_name)
+            if penalty_val is not None:
+                if (
+                    isinstance(penalty_val, bool)
+                    or not isinstance(penalty_val, (int, float))
+                    or not (-2.0 <= penalty_val <= 2.0)
+                ):
+                    raise InvalidRequest(f"{penalty_name} must be a number between -2.0 and 2.0")
+                _LOG.debug(
+                    "request specified %s=%s (accepted for OpenAI compatibility)",
+                    penalty_name,
+                    penalty_val,
+                )
+
         requested = body.get("model")
         if not isinstance(requested, str) or not requested.strip():
             raise InvalidRequest("model must be a non-empty string")
@@ -174,6 +205,7 @@ class ChatCompletionService:
         parsed = parse_tool_calls(
             backend_result.response,
             allowed_tool_names=allowed_names,
+            mode=self.tool_call_mode,
         )
         usage = backend_result.usage
         normalized_usage = {
@@ -226,15 +258,17 @@ class ChatCompletionService:
             except TypeError:
                 stream_gen = self.backend.generate_stream(prompt, actual_model)
             accumulated_text = ""
+            streamed_text = ""
             has_tool_call_start = False
             for event in stream_gen:
                 etype = event.get("type")
                 if etype == "delta":
                     text = str(event.get("content", ""))
                     accumulated_text += text
-                    if "<tool_call" in accumulated_text:
+                    if "<tool_call" in accumulated_text.lower():
                         has_tool_call_start = True
                     elif not has_tool_call_start:
+                        streamed_text += text
                         yield {
                             "type": "delta",
                             "content": text,
@@ -243,10 +277,36 @@ class ChatCompletionService:
                         }
                 elif etype == "result":
                     backend_response = event["response"]
-                    parsed = parse_tool_calls(
-                        backend_response.response,
-                        allowed_tool_names=allowed_names,
-                    )
+                    try:
+                        parsed = parse_tool_calls(
+                            backend_response.response,
+                            allowed_tool_names=allowed_names,
+                            mode=self.tool_call_mode,
+                        )
+                    except InvalidToolCall as exc:
+                        _LOG.warning("tool call parse failed in stream: %s; degrading to text", exc)
+                        raw = backend_response.response
+                        unstreamed = raw[len(streamed_text):] if raw.startswith(streamed_text) else raw
+                        if unstreamed:
+                            yield {
+                                "type": "delta",
+                                "content": unstreamed,
+                                "requested_model": requested,
+                                "actual_model": actual_model,
+                            }
+                        yield {
+                            "type": "finish",
+                            "finish_reason": "stop",
+                            "usage": {
+                                "prompt_tokens": int(backend_response.usage.get("input_tokens", 0) or 0),
+                                "completion_tokens": int(backend_response.usage.get("output_tokens", 0) or 0),
+                                "total_tokens": int(backend_response.usage.get("total_tokens", 0) or 0),
+                            },
+                            "requested_model": requested,
+                            "actual_model": actual_model,
+                        }
+                        return
+
                     usage = backend_response.usage
                     normalized_usage = {
                         "prompt_tokens": int(usage.get("input_tokens", 0) or 0),
@@ -268,13 +328,19 @@ class ChatCompletionService:
                             "actual_model": actual_model,
                         }
                     else:
-                        if has_tool_call_start and parsed.text:
-                            yield {
-                                "type": "delta",
-                                "content": parsed.text,
-                                "requested_model": requested,
-                                "actual_model": actual_model,
-                            }
+                        if parsed.text:
+                            unstreamed = (
+                                parsed.text[len(streamed_text):]
+                                if parsed.text.startswith(streamed_text)
+                                else parsed.text
+                            )
+                            if unstreamed:
+                                yield {
+                                    "type": "delta",
+                                    "content": unstreamed,
+                                    "requested_model": requested,
+                                    "actual_model": actual_model,
+                                }
                         yield {
                             "type": "finish",
                             "finish_reason": "stop",
@@ -288,6 +354,7 @@ class ChatCompletionService:
             parsed = parse_tool_calls(
                 backend_result.response,
                 allowed_tool_names=allowed_names,
+                mode=self.tool_call_mode,
             )
             usage = backend_result.usage
             normalized_usage = {

@@ -111,6 +111,8 @@ class AntigravityConfig:
         "1.2.2",
     )
     allow_unvalidated_versions: bool = False
+    sync_user_credentials: bool = False
+    tool_call_mode: str = "compatible"
     wrapper: tuple[str, ...] = ()
 
     @property
@@ -341,6 +343,16 @@ class BridgeConfig:
         else:
             raise ConfigurationError("antigravity.wrapper must be an array of strings")
 
+        sync_user_credentials = _as_bool(
+            env.get("AGY_SYNC_USER_CREDENTIALS", agy_raw.get("sync_user_credentials", False)),
+            name="antigravity.sync_user_credentials",
+        )
+        tool_call_mode = str(
+            env.get("AGY_TOOL_CALL_MODE", agy_raw.get("tool_call_mode", "compatible"))
+        ).strip().lower()
+        if tool_call_mode not in ("compatible", "strict"):
+            raise ConfigurationError("antigravity.tool_call_mode must be 'compatible' or 'strict'")
+
         antigravity = AntigravityConfig(
             binary=binary,
             default_model=str(
@@ -381,6 +393,8 @@ class BridgeConfig:
             ),
             validated_versions=validated_versions,
             allow_unvalidated_versions=allow_unvalidated_versions,
+            sync_user_credentials=sync_user_credentials,
+            tool_call_mode=tool_call_mode,
             wrapper=wrapper,
         )
         if not antigravity.default_model:

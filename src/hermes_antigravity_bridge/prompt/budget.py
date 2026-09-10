@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 
 from ..errors import ConfigurationError
+
+_LOG = logging.getLogger(__name__)
 
 DEFAULT_MODEL_CONTEXT_TOKENS: dict[str, int] = {
     # Google Gemini Series (1,000,000 tokens)
@@ -85,13 +88,22 @@ class PromptBudget:
         stripped = norm.removeprefix("models/").strip()
         if stripped in DEFAULT_MODEL_CONTEXT_TOKENS:
             return DEFAULT_MODEL_CONTEXT_TOKENS[stripped]
-        # Dynamic fallback based on model family for future models (e.g. gemini-3.9, gemini-4.0, claude-4.0)
+        # Dynamic fallback based on model family for unlisted models
+        limit: int | None = None
         if "gemini" in norm or "antigravity" in norm:
-            return 1_000_000
-        if "claude" in norm:
-            return 200_000
-        if "gpt" in norm or "o1" in norm or "o3" in norm:
-            return 128_000
+            limit = 1_000_000
+        elif "claude" in norm:
+            limit = 200_000
+        elif "gpt" in norm or "o1" in norm or "o3" in norm:
+            limit = 128_000
+
+        if limit is not None:
+            _LOG.debug(
+                "Model '%s' not in verified context table; using estimated family limit: %d tokens",
+                model,
+                limit,
+            )
+            return limit
         return None
 
     def effective_chars(self, model: str, requested_output_tokens: object = None) -> int:

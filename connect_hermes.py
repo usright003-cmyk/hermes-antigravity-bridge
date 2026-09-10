@@ -99,8 +99,10 @@ timeout_seconds = 300
 sandbox = true
 mode = "plan"
 enforce_tool_isolation = true
-validated_versions = ["*"]
-allow_unvalidated_versions = true
+validated_versions = ["1.1.17", "1.1.28", "1.2.0", "1.2.1", "1.2.2"]
+allow_unvalidated_versions = false
+sync_user_credentials = true
+tool_call_mode = "compatible"
 
 [prompt]
 max_chars = 4000000
@@ -120,6 +122,24 @@ def update_hermes_config(hermes_config_path: Path, token: str) -> None:
     if hermes_config_path.exists():
         backup_path = hermes_config_path.with_suffix(".yaml.bak")
         shutil.copy2(hermes_config_path, backup_path)
+
+    # Securely store token in .env with 0600 permissions
+    env_file = hermes_config_path.parent / ".env"
+    try:
+        env_lines = []
+        if env_file.exists():
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                if not line.startswith("HERMES_ANTIGRAVITY_BRIDGE_TOKEN="):
+                    env_lines.append(line)
+        env_lines.append(f"HERMES_ANTIGRAVITY_BRIDGE_TOKEN={token}")
+        env_file.write_text("\n".join(env_lines) + "\n", encoding="utf-8")
+        if os.name == "posix":
+            try:
+                os.chmod(env_file, 0o600)
+            except OSError:
+                pass
+    except OSError as exc:
+        print(f"Notice: Could not write token to .env: {exc}")
 
     cfg = {}
     if hermes_config_path.exists() and yaml is not None:
@@ -143,6 +163,7 @@ def update_hermes_config(hermes_config_path: Path, token: str) -> None:
         "name": "antigravity",
         "base_url": "http://127.0.0.1:8765/v1",
         "api_key": token,
+        "key_env": "HERMES_ANTIGRAVITY_BRIDGE_TOKEN",
         "api_mode": "chat_completions",
     }
 

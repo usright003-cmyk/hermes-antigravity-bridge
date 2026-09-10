@@ -717,8 +717,54 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             _LOG.info("client disconnected during stream")
         except BridgeError as exc:
             _LOG.warning("bridge error during active stream: %s", exc)
+            try:
+                err_chunk = {
+                    "id": stream_id,
+                    "object": "chat.completion.chunk",
+                    "created": now,
+                    "model": "",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "error": {
+                        "message": _safe_client_message(exc),
+                        "type": exc.error_type,
+                    },
+                }
+                self.wfile.write(b"data: " + _json_bytes(err_chunk) + b"\n\n")
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+            except Exception:
+                pass
         except Exception:  # noqa: BLE001
             _LOG.exception("unexpected error during active stream")
+            try:
+                err_chunk = {
+                    "id": stream_id,
+                    "object": "chat.completion.chunk",
+                    "created": now,
+                    "model": "",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "error": {
+                        "message": "internal bridge stream error",
+                        "type": "internal_error",
+                    },
+                }
+                self.wfile.write(b"data: " + _json_bytes(err_chunk) + b"\n\n")
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+            except Exception:
+                pass
 
     def _completion_response(self, result: Any) -> dict[str, Any]:
         message: dict[str, Any] = {

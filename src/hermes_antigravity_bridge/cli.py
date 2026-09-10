@@ -45,6 +45,7 @@ def _components(config: BridgeConfig) -> tuple[AntigravityBackend, ChatCompletio
         backend=backend,
         prompt_builder=HermesPromptBuilder(),
         prompt_budget=config.prompt,
+        tool_call_mode=config.antigravity.tool_call_mode,
     )
     return backend, service
 

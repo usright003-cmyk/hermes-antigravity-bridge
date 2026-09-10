@@ -17,8 +17,10 @@ home = "~/.local/state/hermes-antigravity-bridge/agy-home"
 runtime_dir = "~/.local/share/hermes-antigravity-bridge/runtime"
 model_cache_ttl_seconds = 60
 max_attempts = 3
-validated_versions = ["*"]
-allow_unvalidated_versions = true
+validated_versions = ["1.1.17", "1.1.28", "1.2.0", "1.2.1", "1.2.2"]
+allow_unvalidated_versions = false
+sync_user_credentials = false
+tool_call_mode = "compatible"
 
 [prompt]
 max_chars = 4000000

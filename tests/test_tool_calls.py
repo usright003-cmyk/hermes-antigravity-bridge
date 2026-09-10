@@ -128,6 +128,27 @@ class ToolCallAdapterTests(unittest.TestCase):
         self.assertEqual(json.loads(result.tool_calls[0]["function"]["arguments"]), {"x": 1})
         self.assertEqual(json.loads(result.tool_calls[1]["function"]["arguments"]), {"x": 2})
 
+    def test_unclosed_tag_followed_by_closed_tag_preserves_intermediate_text(self):
+        text = (
+            'Start <tool_call>{"name": "save_data", "arguments": {"a": 1}} Middle '
+            '<tool_call>{"name": "save_data", "arguments": {"b": 2}}</tool_call> End'
+        )
+        result = parse_tool_calls(text, allowed_tool_names={"save_data"})
+        self.assertEqual(len(result.tool_calls), 2)
+        self.assertEqual(result.text, "Start  Middle  End")
+
+    def test_closing_tag_with_whitespace(self):
+        text = '<tool_call>{"name": "save_data", "arguments": {"x": 1}}</tool_call >'
+        result = parse_tool_calls(text, allowed_tool_names={"save_data"})
+        self.assertEqual(len(result.tool_calls), 1)
+        self.assertEqual(json.loads(result.tool_calls[0]["function"]["arguments"]), {"x": 1})
+
+    def test_repair_json_string_with_python_literals_and_code_fences(self):
+        from hermes_antigravity_bridge.tool_calls import _repair_json_string
+        raw = '```json\n{"flag": True, "empty": None, "inactive": False,}\n```'
+        repaired = _repair_json_string(raw)
+        self.assertEqual(json.loads(repaired), {"flag": True, "empty": None, "inactive": False})
+
 
 if __name__ == "__main__":
     unittest.main()

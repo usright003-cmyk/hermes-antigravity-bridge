@@ -37,12 +37,15 @@ _ALLOWED_FIELDS = {
 _ALLOWED_ROLES = {"system", "developer", "user", "assistant", "tool"}
 
 
+_TOOL_CALL_PREFIXES = tuple("<tool_call"[:i] for i in range(len("<tool_call") - 1, 0, -1))
+
+
 def _extract_unstreamed_text(full_text: str, streamed_text: str) -> str:
     full_stripped = full_text.strip()
     streamed_stripped = streamed_text.strip()
     if not streamed_stripped:
         return full_text
-    if full_stripped == streamed_stripped:
+    if full_stripped == streamed_stripped or streamed_stripped.startswith(full_stripped):
         return ""
     if full_stripped.startswith(streamed_stripped):
         remainder = full_stripped[len(streamed_stripped):]
@@ -50,7 +53,10 @@ def _extract_unstreamed_text(full_text: str, streamed_text: str) -> str:
         if streamed_trailing and remainder.startswith(streamed_trailing):
             remainder = remainder[len(streamed_trailing):]
         return remainder
-    return full_text.removeprefix(streamed_text)
+    rem = full_text.removeprefix(streamed_text)
+    if rem != full_text:
+        return rem
+    return ""
 
 
 class ChatCompletionService:
@@ -285,25 +291,60 @@ class ChatCompletionService:
                         raise
             else:
                 stream_gen = self.backend.generate_stream(prompt, actual_model)
-            accumulated_text = ""
+            pending_buffer = ""
             streamed_text = ""
             has_tool_call_start = False
             for event in stream_gen:
                 etype = event.get("type")
                 if etype == "delta":
                     text = str(event.get("content", ""))
-                    accumulated_text += text
-                    if "<tool_call" in accumulated_text.lower():
+                    if has_tool_call_start:
+                        continue
+                    pending_buffer += text
+                    lowered = pending_buffer.lower()
+                    if "<tool_call" in lowered:
                         has_tool_call_start = True
-                    elif not has_tool_call_start:
-                        streamed_text += text
+                        idx = lowered.find("<tool_call")
+                        prefix = pending_buffer[:idx]
+                        if prefix:
+                            streamed_text += prefix
+                            yield {
+                                "type": "delta",
+                                "content": prefix,
+                                "requested_model": requested,
+                                "actual_model": actual_model,
+                            }
+                        pending_buffer = ""
+                    else:
+                        match_len = 0
+                        for pfx in _TOOL_CALL_PREFIXES:
+                            if lowered.endswith(pfx):
+                                match_len = len(pfx)
+                                break
+                        if match_len > 0:
+                            to_emit = pending_buffer[:-match_len]
+                            pending_buffer = pending_buffer[-match_len:]
+                        else:
+                            to_emit = pending_buffer
+                            pending_buffer = ""
+                        if to_emit:
+                            streamed_text += to_emit
+                            yield {
+                                "type": "delta",
+                                "content": to_emit,
+                                "requested_model": requested,
+                                "actual_model": actual_model,
+                            }
+                elif etype == "result":
+                    if not has_tool_call_start and pending_buffer:
+                        streamed_text += pending_buffer
                         yield {
                             "type": "delta",
-                            "content": text,
+                            "content": pending_buffer,
                             "requested_model": requested,
                             "actual_model": actual_model,
                         }
-                elif etype == "result":
+                        pending_buffer = ""
                     backend_response = event["response"]
                     try:
                         parsed = parse_tool_calls(
@@ -347,6 +388,15 @@ class ChatCompletionService:
                         "total_tokens": int(usage.get("total_tokens", 0) or 0),
                     }
                     if parsed.tool_calls:
+                        if has_tool_call_start and parsed.text:
+                            unstreamed = _extract_unstreamed_text(parsed.text, streamed_text)
+                            if unstreamed:
+                                yield {
+                                    "type": "delta",
+                                    "content": unstreamed,
+                                    "requested_model": requested,
+                                    "actual_model": actual_model,
+                                }
                         yield {
                             "type": "tool_calls",
                             "tool_calls": parsed.tool_calls,
@@ -402,6 +452,13 @@ class ChatCompletionService:
                 "total_tokens": int(usage.get("total_tokens", 0) or 0),
             }
             if parsed.tool_calls:
+                if parsed.text:
+                    yield {
+                        "type": "delta",
+                        "content": parsed.text,
+                        "requested_model": requested,
+                        "actual_model": actual_model,
+                    }
                 yield {
                     "type": "tool_calls",
                     "tool_calls": parsed.tool_calls,

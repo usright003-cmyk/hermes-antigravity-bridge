@@ -381,6 +381,103 @@ class ChatCompletionServiceTests(unittest.TestCase):
         self.assertNotIn("Before tag.\nBefore tag.", combined)
         self.assertIn("After tag.", combined)
 
+    def test_complete_stream_content_before_tool_call_in_same_chunk(self):
+        chunks = [
+            'I will call the tool.\n<tool_call>{"name": "memory", "arguments": {"action": "add"}}</tool_call>'
+        ]
+        backend = StreamingFakeBackend(chunks=chunks, final_response=chunks[0])
+        service = ChatCompletionService(
+            backend=backend,
+            prompt_builder=HermesPromptBuilder(),
+            prompt_budget=PromptBudget(),
+        )
+        events = list(service.complete_stream({
+            "model": "model-a",
+            "stream": True,
+            "messages": [{"role": "user", "content": "remember"}],
+            "tools": [{"type": "function", "function": {"name": "memory", "parameters": {"type": "object"}}}],
+        }))
+        deltas = [e["content"] for e in events if e.get("type") == "delta"]
+        self.assertEqual(deltas, ["I will call the tool.\n"])
+        tc_event = next(e for e in events if e.get("type") == "tool_calls")
+        self.assertEqual(tc_event["tool_calls"][0]["function"]["name"], "memory")
+        finish = next(e for e in events if e.get("type") == "finish")
+        self.assertEqual(finish["finish_reason"], "tool_calls")
+
+    def test_complete_stream_tool_tag_split_across_chunk_boundary_does_not_leak(self):
+        chunks = [
+            "I will call the tool: <tool_",
+            'call>{"name": "memory", "arguments": {"action": "add"}}</tool_call>',
+        ]
+        backend = StreamingFakeBackend(chunks=chunks, final_response="".join(chunks))
+        service = ChatCompletionService(
+            backend=backend,
+            prompt_builder=HermesPromptBuilder(),
+            prompt_budget=PromptBudget(),
+        )
+        events = list(service.complete_stream({
+            "model": "model-a",
+            "stream": True,
+            "messages": [{"role": "user", "content": "remember"}],
+            "tools": [{"type": "function", "function": {"name": "memory", "parameters": {"type": "object"}}}],
+        }))
+        deltas = [e["content"] for e in events if e.get("type") == "delta"]
+        # Tag prefix '<tool_' must NOT leak into deltas
+        self.assertEqual(deltas, ["I will call the tool: "])
+        tc_event = next(e for e in events if e.get("type") == "tool_calls")
+        self.assertEqual(tc_event["tool_calls"][0]["function"]["name"], "memory")
+
+    def test_complete_stream_content_after_tool_call(self):
+        chunks = [
+            '<tool_call>{"name": "memory", "arguments": {"action": "add"}}</tool_call>\nPlease wait.',
+        ]
+        backend = StreamingFakeBackend(chunks=chunks, final_response=chunks[0])
+        service = ChatCompletionService(
+            backend=backend,
+            prompt_builder=HermesPromptBuilder(),
+            prompt_budget=PromptBudget(),
+        )
+        events = list(service.complete_stream({
+            "model": "model-a",
+            "stream": True,
+            "messages": [{"role": "user", "content": "remember"}],
+            "tools": [{"type": "function", "function": {"name": "memory", "parameters": {"type": "object"}}}],
+        }))
+        deltas = [e["content"] for e in events if e.get("type") == "delta"]
+        self.assertEqual(deltas, ["Please wait."])
+        tc_event = next(e for e in events if e.get("type") == "tool_calls")
+        self.assertEqual(tc_event["tool_calls"][0]["function"]["name"], "memory")
+
+    def test_complete_stream_non_streaming_backend_content_with_tool_call(self):
+        class NonStreamingFake(FakeBackend):
+            def generate(self, prompt, model, **kwargs):
+                return BackendResponse(
+                    response='I will check.\n<tool_call>{"name": "memory", "arguments": {"action": "add"}}</tool_call>',
+                    model=model,
+                    usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                    duration_seconds=0.1,
+                )
+
+        service = ChatCompletionService(
+            backend=NonStreamingFake(),
+            prompt_builder=HermesPromptBuilder(),
+            prompt_budget=PromptBudget(),
+        )
+        events = list(service.complete_stream({
+            "model": "model-a",
+            "stream": True,
+            "messages": [{"role": "user", "content": "remember"}],
+            "tools": [{"type": "function", "function": {"name": "memory", "parameters": {"type": "object"}}}],
+        }))
+        deltas = [e["content"] for e in events if e.get("type") == "delta"]
+        self.assertEqual(deltas, ["I will check."])
+        tc_event = next(e for e in events if e.get("type") == "tool_calls")
+        self.assertEqual(tc_event["tool_calls"][0]["function"]["name"], "memory")
+
+    def test_extract_unstreamed_text_no_duplicates_when_streamed_longer(self):
+        from hermes_antigravity_bridge.service import _extract_unstreamed_text
+        self.assertEqual(_extract_unstreamed_text("Hello world", "Hello world\nMore text"), "")
+
 
 class StreamingFakeBackend(FakeBackend):
     def __init__(self, chunks, final_response=None, usage=None):

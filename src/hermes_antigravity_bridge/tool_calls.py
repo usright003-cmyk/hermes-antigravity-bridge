@@ -15,6 +15,7 @@ from .errors import InvalidToolCall
 _LOG = logging.getLogger(__name__)
 
 _TOOL_TAG_START_RE = re.compile(r"<tool_call(?:\s+[^>]*)?>", re.IGNORECASE)
+_TOOL_TAG_END_RE = re.compile(r"</tool_call\s*>", re.IGNORECASE)
 _TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _MAX_TOOL_CALLS = 16
 _MAX_BLOCK_CHARS = 65_536
@@ -24,11 +25,14 @@ _MAX_ARGUMENT_CHARS = 65_536
 def _repair_json_string(raw: str) -> str:
     """Best-effort cleanup of common JSON malformations from LLM output."""
     s = raw.strip()
-    # Strip markdown code fences if present: ```json ... ```
-    if s.startswith("```"):
-        s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.IGNORECASE)
-        s = re.sub(r"\s*```$", "", s)
-        s = s.strip()
+    # Strip markdown code fences if present
+    s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\s*```$", "", s)
+    s = s.strip()
+    # Replace unquoted Python booleans/None with JSON literals
+    s = re.sub(r":\s*True\b", ": true", s)
+    s = re.sub(r":\s*False\b", ": false", s)
+    s = re.sub(r":\s*None\b", ": null", s)
     # Remove trailing commas before closing braces/brackets
     s = re.sub(r",\s*([}\]])", r"\1", s)
     return s
@@ -134,20 +138,28 @@ def parse_tool_calls(
         tag_start = tag_match.start()
         inner_start = tag_match.end()
 
+        # Check if another opening tag exists after inner_start
+        next_tag_match = _TOOL_TAG_START_RE.search(text, inner_start)
+
         # Find closing </tool_call>
-        close_idx = text.lower().find("</tool_call>", inner_start)
-        if close_idx != -1:
-            block_content = text[inner_start:close_idx]
-            tag_end = close_idx + len("</tool_call>")
+        close_match = _TOOL_TAG_END_RE.search(text, inner_start)
+
+        is_closed = (
+            close_match is not None
+            and (next_tag_match is None or close_match.start() < next_tag_match.start())
+        )
+        if is_closed:
+            assert close_match is not None
+            block_content = text[inner_start:close_match.start()]
+            tag_end = close_match.end()
+        elif next_tag_match is not None:
+            # Unclosed tag before next opening tag
+            block_content = text[inner_start:next_tag_match.start()]
+            tag_end = next_tag_match.start()
         else:
-            # Unclosed tag at end of message or before next tag
-            next_tag_match = _TOOL_TAG_START_RE.search(text, inner_start)
-            if next_tag_match is not None:
-                block_content = text[inner_start:next_tag_match.start()]
-                tag_end = next_tag_match.start()
-            else:
-                block_content = text[inner_start:]
-                tag_end = len(text)
+            # Unclosed tag at end of message
+            block_content = text[inner_start:]
+            tag_end = len(text)
 
         if len(block_content) > _MAX_BLOCK_CHARS:
             if mode == "strict":
@@ -155,7 +167,7 @@ def parse_tool_calls(
             _LOG.warning("Tool call block length (%d) exceeds limit; skipping", len(block_content))
             continue
 
-        payload, _ = _extract_json_object(block_content, 0)
+        payload, end_offset = _extract_json_object(block_content, 0)
         if payload is None:
             if mode == "strict":
                 raise InvalidToolCall("model emitted a malformed tool-call payload")
@@ -164,6 +176,9 @@ def parse_tool_calls(
                 len(block_content),
             )
             continue
+
+        if not is_closed and end_offset > 0:
+            tag_end = inner_start + end_offset
 
         # Extract function object or flat payload
         fn_value = payload.get("function")

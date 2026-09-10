@@ -85,6 +85,13 @@ class PromptBudget:
         stripped = norm.removeprefix("models/").strip()
         if stripped in DEFAULT_MODEL_CONTEXT_TOKENS:
             return DEFAULT_MODEL_CONTEXT_TOKENS[stripped]
+        # Dynamic fallback based on model family for future models (e.g. gemini-3.9, gemini-4.0, claude-4.0)
+        if "gemini" in norm or "antigravity" in norm:
+            return 1_000_000
+        if "claude" in norm:
+            return 200_000
+        if "gpt" in norm or "o1" in norm or "o3" in norm:
+            return 128_000
         return None
 
     def effective_chars(self, model: str, requested_output_tokens: object = None) -> int:

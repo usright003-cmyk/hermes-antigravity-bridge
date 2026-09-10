@@ -106,6 +106,9 @@ class AntigravityConfig:
         "1.1.28",
         "1.1.29",
         "1.1.30",
+        "1.2.0",
+        "1.2.1",
+        "1.2.2",
     )
     allow_unvalidated_versions: bool = False
     wrapper: tuple[str, ...] = ()
@@ -309,7 +312,17 @@ class BridgeConfig:
                 maximum=64,
             ),
         )
-        default_versions = ["1.1.17", "1.1.26", "1.1.27", "1.1.28", "1.1.29", "1.1.30"]
+        default_versions = [
+            "1.1.17",
+            "1.1.26",
+            "1.1.27",
+            "1.1.28",
+            "1.1.29",
+            "1.1.30",
+            "1.2.0",
+            "1.2.1",
+            "1.2.2",
+        ]
         validated_versions_value = agy_raw.get("validated_versions", default_versions)
         if not isinstance(validated_versions_value, list) or not validated_versions_value:
             raise ConfigurationError("antigravity.validated_versions must be a non-empty array")

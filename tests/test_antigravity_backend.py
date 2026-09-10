@@ -209,5 +209,27 @@ class AntigravityBackendTests(unittest.TestCase):
             self.assertEqual(results[0].usage["total_tokens"], 14)
 
 
+    def test_auto_sync_credentials_and_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            user_cli = tmp_path / "user_home" / ".gemini" / "antigravity-cli"
+            user_cli.mkdir(parents=True, exist_ok=True)
+            (user_cli / "jetski_state.pbtxt").write_text("token: new_auth_token\n", encoding="utf-8")
+            (user_cli / "installation_id").write_text("inst-999\n", encoding="utf-8")
+
+            isolated_home = tmp_path / "isolated_home"
+            backend = self.make_backend(
+                tmp_path / "runtime",
+                home=isolated_home,
+            )
+            with patch("pathlib.Path.home", return_value=tmp_path / "user_home"):
+                self.assertTrue(backend.is_authenticated())
+                synced_jetski = isolated_home / ".gemini" / "antigravity-cli" / "jetski_state.pbtxt"
+                synced_settings = isolated_home / ".gemini" / "antigravity-cli" / "settings.json"
+                self.assertTrue(synced_jetski.exists())
+                self.assertEqual(synced_jetski.read_text(encoding="utf-8"), "token: new_auth_token\n")
+                self.assertTrue(synced_settings.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,38 @@
+﻿name: Upstream Compatibility Monitor
+
+on:
+  schedule:
+    # Run daily at 00:00 UTC
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Query Google Antigravity Release Manifests
+        id: query
+        run: |
+          echo "Checking Google Antigravity latest releases..."
+          AMD64_MANIFEST=$(curl -fsSL https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_amd64.json || echo "{}")
+          ARM64_MANIFEST=$(curl -fsSL https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_arm64.json || echo "{}")
+          
+          AMD64_VER=$(echo "$AMD64_MANIFEST" | grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4 || echo "unknown")
+          ARM64_VER=$(echo "$ARM64_MANIFEST" | grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4 || echo "unknown")
+          
+          echo "Latest AMD64 Version: $AMD64_VER"
+          echo "Latest ARM64 Version: $ARM64_VER"
+
+      - name: Install Bridge & Run Compatibility Tests
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[dev]"
+          python -m unittest discover -s tests -v
+          ruff check src tests

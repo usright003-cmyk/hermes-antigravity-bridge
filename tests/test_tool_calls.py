@@ -41,5 +41,12 @@ class ToolCallAdapterTests(unittest.TestCase):
         self.assertEqual(json.loads(result.tool_calls[0]["function"]["arguments"]), {"path": "a.txt"})
 
 
+    def test_plain_text_with_tool_call_tag_when_no_tools_advertised(self):
+        text = "To make a tool call, you can use the <tool_call> tag."
+        result = parse_tool_calls(text, allowed_tool_names=())
+        self.assertEqual(result.text, text)
+        self.assertEqual(result.tool_calls, ())
+
+
 if __name__ == "__main__":
     unittest.main()

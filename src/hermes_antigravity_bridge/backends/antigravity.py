@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import queue
+import shutil
 import signal
 import subprocess
 import sys
@@ -39,8 +40,12 @@ _REQUIRED_FLAGS = {
 }
 _TRANSIENT_MARKERS = (
     "503",
+    "429",
     "unavailable",
     "rate limit",
+    "overloaded",
+    "quota",
+    "resource exhausted",
     "busy",
     "timeout",
     "temporar",
@@ -161,7 +166,46 @@ class AntigravityBackend:
         self._model_cache: tuple[float, tuple[str, ...]] = (0.0, ())
         self._model_source: str = "unknown"
 
+    def _sync_credentials_and_settings(self) -> None:
+        """Auto-sync credentials and ensure safe default settings in isolated home."""
+        cli_dir = self.config.home / ".gemini" / "antigravity-cli"
+        try:
+            cli_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+
+        # 1. Ensure settings.json exists with strict fail-closed isolation if missing
+        settings_file = self.config.settings_file
+        if not settings_file.exists():
+            default_settings = {
+                "artifactReviewPolicy": "asks-for-review",
+                "permissions": {"allow": []},
+                "toolPermission": "strict",
+                "trustedWorkspaces": [],
+            }
+            try:
+                settings_file.write_text(json.dumps(default_settings, indent=2), encoding="utf-8")
+            except OSError as exc:
+                _LOG.warning("could not auto-create isolated settings.json: %s", exc)
+
+        # 2. Auto-sync authentication state from user profile if missing or newer
+        try:
+            user_cli = Path.home() / ".gemini" / "antigravity-cli"
+            if user_cli.exists() and user_cli.resolve() != cli_dir.resolve():
+                for filename in ("installation_id", "jetski_state.pbtxt"):
+                    src = user_cli / filename
+                    dst = cli_dir / filename
+                    if src.is_file() and src.stat().st_size > 0:
+                        try:
+                            if not dst.exists() or src.stat().st_mtime > dst.stat().st_mtime:
+                                shutil.copy2(src, dst)
+                        except OSError as exc:
+                            _LOG.debug("could not auto-sync %s: %s", filename, exc)
+        except OSError as exc:
+            _LOG.debug("credentials auto-sync error: %s", exc)
+
     def _base_environment(self) -> dict[str, str]:
+        self._sync_credentials_and_settings()
         env = dict(os.environ)
         env["HOME"] = str(self.config.home)
         env.setdefault("NO_COLOR", "1")
@@ -178,6 +222,7 @@ class AntigravityBackend:
 
     def is_authenticated(self) -> bool:
         """Check if Google Antigravity credentials exist."""
+        self._sync_credentials_and_settings()
         candidates = [
             self.config.home / ".gemini" / "antigravity-cli" / "jetski_state.pbtxt",
             Path.home() / ".gemini" / "antigravity-cli" / "jetski_state.pbtxt",
@@ -215,6 +260,7 @@ class AntigravityBackend:
 
     def _verify_if_required(self) -> None:
         if self.config.enforce_tool_isolation:
+            self._sync_credentials_and_settings()
             self.verify_tool_isolation_settings(self.config.settings_file)
 
     def _binary_command_prefix(self) -> list[str]:
@@ -391,7 +437,11 @@ class AntigravityBackend:
         if version_result.returncode != 0:
             raise BackendUnavailable("Antigravity --version failed")
         version = version_result.stdout.strip().splitlines()[0] if version_result.stdout.strip() else ""
-        if "*" not in self.config.validated_versions and version not in self.config.validated_versions:
+        is_validated = (
+            "*" in self.config.validated_versions
+            or version in self.config.validated_versions
+        )
+        if not is_validated:
             if not self.config.allow_unvalidated_versions:
                 raise BackendProtocolError(
                     f"Antigravity CLI version '{version or 'unknown'}' is not in validated versions: "

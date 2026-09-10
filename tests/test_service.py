@@ -115,5 +115,19 @@ class ChatCompletionServiceTests(unittest.TestCase):
         self.assertTrue(any(e["type"] == "finish" and e["finish_reason"] == "stop" for e in events))
 
 
+    def test_accepts_max_completion_tokens_and_standard_fields(self):
+        service, _ = self.make_service("OK")
+        result = service.complete({
+            "model": "model-a",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_completion_tokens": 100,
+            "seed": 42,
+            "parallel_tool_calls": True,
+            "presence_penalty": 0.0,
+            "frequency_penalty": 0.0,
+        })
+        self.assertEqual(result.text, "OK")
+
+
 if __name__ == "__main__":
     unittest.main()

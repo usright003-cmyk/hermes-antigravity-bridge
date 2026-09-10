@@ -19,10 +19,15 @@ _ALLOWED_FIELDS = {
     "tools",
     "stream",
     "max_tokens",
+    "max_completion_tokens",
     "temperature",
     "top_p",
     "stop",
     "tool_choice",
+    "parallel_tool_calls",
+    "seed",
+    "presence_penalty",
+    "frequency_penalty",
     "n",
     "user",
     "reasoning_effort",
@@ -139,7 +144,7 @@ class ChatCompletionService:
         actual_model = self.backend.resolve_model(requested)
         max_chars = self.prompt_budget.effective_chars(
             actual_model,
-            body.get("max_tokens") if isinstance(body, dict) else None,
+            (body.get("max_completion_tokens") or body.get("max_tokens")) if isinstance(body, dict) else None,
         )
         prompt = self.prompt_builder.build(
             messages,
@@ -191,7 +196,7 @@ class ChatCompletionService:
         actual_model = self.backend.resolve_model(requested)
         max_chars = self.prompt_budget.effective_chars(
             actual_model,
-            body.get("max_tokens") if isinstance(body, dict) else None,
+            (body.get("max_completion_tokens") or body.get("max_tokens")) if isinstance(body, dict) else None,
         )
         prompt = self.prompt_builder.build(
             messages,

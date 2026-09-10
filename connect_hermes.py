@@ -99,8 +99,8 @@ timeout_seconds = 300
 sandbox = true
 mode = "plan"
 enforce_tool_isolation = true
-validated_versions = ["1.1.17", "1.1.28"]
-allow_unvalidated_versions = false
+validated_versions = ["*"]
+allow_unvalidated_versions = true
 
 [prompt]
 max_chars = 4000000

@@ -87,7 +87,7 @@ def parse_tool_calls(
         spans.append((match.start(), match.end()))
 
     if not calls:
-        if "<tool_call>" in text or "</tool_call>" in text:
+        if ("<tool_call>" in text or "</tool_call>" in text) and allowed_tool_names:
             raise InvalidToolCall("model emitted a malformed tool-call block")
         return ParsedAssistantOutput(text=text.strip())
 

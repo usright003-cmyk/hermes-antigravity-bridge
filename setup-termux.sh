@@ -145,7 +145,23 @@ proot-distro login ubuntu -- bash -c '
     # Start bridge server daemon in background
     pkill -f "hermes_antigravity_bridge.cli serve" >/dev/null 2>&1 || true
     python3 -m hermes_antigravity_bridge.cli --config "$HOME/.config/hermes-antigravity-bridge/config.toml" serve > /tmp/bridge.log 2>&1 &
-    sleep 2
+    
+    BRIDGE_READY=0
+    for i in 1 2 3 4 5; do
+        sleep 1
+        if curl -s -f http://127.0.0.1:8765/health >/dev/null 2>&1; then
+            BRIDGE_READY=1
+            break
+        fi
+    done
+
+    if [ "$BRIDGE_READY" -ne 1 ]; then
+        echo -e "\033[0;31m[!] Error: Bridge daemon failed to start on http://127.0.0.1:8765\033[0m"
+        echo -e "\033[1;33m--- Daemon Log (/tmp/bridge.log) ---\033[0m"
+        cat /tmp/bridge.log 2>/dev/null || true
+        echo -e "\033[1;33m-------------------------------------\033[0m"
+        exit 1
+    fi
 
     # Launch Hermes interactive session
     hermes

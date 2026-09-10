@@ -87,6 +87,12 @@ class PromptPolicyTests(unittest.TestCase):
         self.assertEqual(budget.effective_chars("gpt-4o"), 479_232)
         self.assertEqual(budget.effective_chars("custom-local-model"), 4_000_000)
 
+    def test_future_model_family_heuristics(self):
+        budget = PromptBudget()
+        self.assertEqual(budget.effective_chars("gemini-4.0-flash"), 3_967_232)
+        self.assertEqual(budget.effective_chars("claude-4-opus"), 767_232)
+        self.assertEqual(budget.effective_chars("gpt-5-mini"), 479_232)
+
 
 if __name__ == "__main__":
     unittest.main()

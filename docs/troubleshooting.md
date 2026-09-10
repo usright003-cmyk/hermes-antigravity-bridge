@@ -6,7 +6,7 @@ Use the dedicated Antigravity home and keep its settings strict:
 
 ```json
 {
-  "artifactReviewPolicy": "request-review",
+  "artifactReviewPolicy": "asks-for-review",
   "permissions": {"allow": []},
   "toolPermission": "strict",
   "trustedWorkspaces": []

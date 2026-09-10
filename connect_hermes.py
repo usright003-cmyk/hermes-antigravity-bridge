@@ -53,7 +53,7 @@ def setup_agy_isolation_home() -> Path:
     # Set fail-closed strict tool isolation settings
     settings_file = cli_dir / "settings.json"
     settings_file.write_text(json.dumps({
-        "artifactReviewPolicy": "request-review",
+        "artifactReviewPolicy": "asks-for-review",
         "permissions": {"allow": []},
         "toolPermission": "strict",
         "trustedWorkspaces": []

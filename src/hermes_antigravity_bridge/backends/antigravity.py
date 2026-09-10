@@ -159,6 +159,7 @@ class AntigravityBackend:
         self.config = config
         self._cache_lock = threading.Lock()
         self._model_cache: tuple[float, tuple[str, ...]] = (0.0, ())
+        self._model_source: str = "unknown"
 
     def _base_environment(self) -> dict[str, str]:
         env = dict(os.environ)
@@ -175,6 +176,18 @@ class AntigravityBackend:
             pass
         return runtime
 
+    def is_authenticated(self) -> bool:
+        """Check if Google Antigravity credentials exist."""
+        candidates = [
+            self.config.home / ".gemini" / "antigravity-cli" / "jetski_state.pbtxt",
+            Path.home() / ".gemini" / "antigravity-cli" / "jetski_state.pbtxt",
+        ]
+        return any(p.is_file() and p.stat().st_size > 0 for p in candidates)
+
+    @property
+    def model_source(self) -> str:
+        return self._model_source
+
     def verify_tool_isolation_settings(self, settings_path: Path) -> None:
         """Require Antigravity to deny autonomous internal tool execution."""
         try:
@@ -186,15 +199,18 @@ class AntigravityBackend:
         permissions = payload.get("permissions")
         allow_rules = permissions.get("allow", []) if isinstance(permissions, dict) else []
         trusted = payload.get("trustedWorkspaces", [])
+        policy = payload.get("artifactReviewPolicy")
+        valid_policies = {"asks-for-review", "agent-decides"}
         if (
             payload.get("toolPermission") != "strict"
-            or payload.get("artifactReviewPolicy") == "always-proceed"
+            or policy not in valid_policies
             or allow_rules
             or trusted
         ):
             raise ToolIsolationError(
                 "Antigravity strict tool isolation requires toolPermission='strict', "
-                "no allow rules, no trusted workspaces, and no always-proceed artifact policy"
+                "artifactReviewPolicy in ('asks-for-review', 'agent-decides'), "
+                "no allow rules, and no trusted workspaces"
             )
 
     def _verify_if_required(self) -> None:
@@ -203,9 +219,12 @@ class AntigravityBackend:
 
     def _binary_command_prefix(self) -> list[str]:
         binary_str = str(self.config.binary)
+        base = [binary_str]
         if binary_str.lower().endswith(".py"):
-            return [sys.executable, binary_str]
-        return [binary_str]
+            base = [sys.executable, binary_str]
+        if self.config.wrapper:
+            return list(self.config.wrapper) + base
+        return base
 
     def build_command(self, model: str, effort: str | None = None) -> list[str]:
         command = self._binary_command_prefix() + [
@@ -272,8 +291,11 @@ class AntigravityBackend:
                 models = parse_model_ids(completed.stdout) if completed.returncode == 0 else ()
             except (OSError, subprocess.TimeoutExpired):
                 models = ()
-            if not models:
+            if models:
+                self._model_source = "discovered"
+            else:
                 models = DEFAULT_ANTIGRAVITY_MODELS
+                self._model_source = "fallback"
             self._model_cache = (now, models)
             return models
 
@@ -372,9 +394,10 @@ class AntigravityBackend:
         if "*" not in self.config.validated_versions and version not in self.config.validated_versions:
             if not self.config.allow_unvalidated_versions:
                 raise BackendProtocolError(
-                    f"Antigravity CLI version {version or 'unknown'} is not validated; "
-                    f"supported versions: {', '.join(self.config.validated_versions)}. "
-                    "Set antigravity.allow_unvalidated_versions = true in config to bypass."
+                    f"Antigravity CLI version '{version or 'unknown'}' is not in validated versions: "
+                    f"{', '.join(self.config.validated_versions)}. "
+                    "To update agy, run: curl -fsSL https://antigravity.google/cli/install.sh | bash. "
+                    "To bypass validation, set antigravity.allow_unvalidated_versions = true in config.toml."
                 )
             _LOG.warning(
                 "Antigravity CLI version %s is unvalidated (validated: %s); proceeding because allow_unvalidated_versions=True",
@@ -382,14 +405,21 @@ class AntigravityBackend:
                 self.config.validated_versions,
             )
         models = self.list_models(force_refresh=True)
-        return {
-            "status": "ready",
+        authenticated = self.is_authenticated()
+        status = "ready" if authenticated else "degraded"
+        result: dict[str, Any] = {
+            "status": status,
+            "authenticated": authenticated,
             "agy_version": version,
             "models": list(models),
+            "model_source": self._model_source,
             "sandbox": self.config.sandbox,
             "mode": self.config.mode,
             "stateless": True,
         }
+        if not authenticated:
+            result["reason"] = "authentication required; run 'agy' to sign in"
+        return result
 
     def _terminate(self, process: subprocess.Popen[str]) -> None:
         if process.poll() is not None:

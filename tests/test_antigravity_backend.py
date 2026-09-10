@@ -32,11 +32,13 @@ class AntigravityBackendTests(unittest.TestCase):
         settings = agy_home / ".gemini/antigravity-cli/settings.json"
         settings.parent.mkdir(parents=True, exist_ok=True)
         settings.write_text(json.dumps({
-            "artifactReviewPolicy": "request-review",
+            "artifactReviewPolicy": "asks-for-review",
             "permissions": {"allow": []},
             "toolPermission": "strict",
             "trustedWorkspaces": [],
         }), encoding="utf-8")
+        jetski = agy_home / ".gemini/antigravity-cli/jetski_state.pbtxt"
+        jetski.write_text("fake_auth_token: 12345\n", encoding="utf-8")
         values = {
             "binary": FAKE_AGY,
             "default_model": "gemini-test-high",
@@ -148,7 +150,7 @@ class AntigravityBackendTests(unittest.TestCase):
             backend = self.make_backend(Path(tmp))
             with (
                 patch.dict(os.environ, {"FAKE_AGY_VERSION": "9.9.9"}),
-                self.assertRaisesRegex(BackendProtocolError, "not validated"),
+                self.assertRaisesRegex(BackendProtocolError, "validated"),
             ):
                 backend.readiness()
 
@@ -157,7 +159,43 @@ class AntigravityBackendTests(unittest.TestCase):
             backend = self.make_backend(Path(tmp))
             readiness = backend.readiness()
             self.assertEqual(readiness["status"], "ready")
+            self.assertTrue(readiness["authenticated"])
+            self.assertEqual(readiness["model_source"], "discovered")
             self.assertEqual(readiness["models"], ["gemini-test-high", "gemini-test-low"])
+
+    def test_readiness_reports_degraded_when_unauthenticated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = self.make_backend(Path(tmp))
+            jetski = backend.config.home / ".gemini/antigravity-cli/jetski_state.pbtxt"
+            if jetski.exists():
+                jetski.unlink()
+            with patch("pathlib.Path.home", return_value=Path(tmp) / "empty_home"):
+                readiness = backend.readiness()
+                self.assertEqual(readiness["status"], "degraded")
+                self.assertFalse(readiness["authenticated"])
+                self.assertIn("reason", readiness)
+
+    def test_rejects_invalid_artifact_review_policy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Path(tmp) / "settings.json"
+            settings.write_text(json.dumps({
+                "artifactReviewPolicy": "request-review",
+                "permissions": {"allow": []},
+                "toolPermission": "strict",
+                "trustedWorkspaces": [],
+            }), encoding="utf-8")
+            backend = self.make_backend(Path(tmp) / "runtime")
+            with self.assertRaisesRegex(ToolIsolationError, "artifactReviewPolicy"):
+                backend.verify_tool_isolation_settings(settings)
+
+    def test_wrapper_prepends_to_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = self.make_backend(
+                Path(tmp),
+                wrapper=("proot-distro", "login", "ubuntu", "--"),
+            )
+            cmd = backend.build_command("gemini-test-high")
+            self.assertEqual(cmd[:4], ["proot-distro", "login", "ubuntu", "--"])
 
     def test_generate_stream_yields_realtime_deltas_and_final_result(self):
         with tempfile.TemporaryDirectory() as tmp:

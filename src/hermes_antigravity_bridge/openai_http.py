@@ -237,7 +237,7 @@ _DASHBOARD_HTML: bytes = b"""<!DOCTYPE html>
       </div>
       <div class="sec-item">
         <strong>&#128207; Context Budget</strong>
-        <span>Enforces 64,000 character maximum prompt cap.</span>
+        <span>Enforces 4,000,000 character maximum prompt cap (1M Tokens).</span>
       </div>
       <div class="sec-item">
         <strong>&#9889; Low-Latency Transport</strong>
@@ -440,6 +440,10 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/metrics":
             stats = self.bridge_server.metrics.snapshot()
+            backend = getattr(self.bridge_server.chat_service, "backend", None)
+            model_source = getattr(backend, "model_source", "unknown")
+            is_auth_func = getattr(backend, "is_authenticated", None)
+            authenticated = is_auth_func() if callable(is_auth_func) else True
             try:
                 models = self.bridge_server.chat_service.list_models()
             except Exception:  # noqa: BLE001
@@ -449,7 +453,9 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                 {
                     "service": "hermes-antigravity-bridge",
                     "version": __version__,
-                    "status": "online",
+                    "status": "online" if authenticated else "degraded",
+                    "authenticated": authenticated,
+                    "model_source": model_source,
                     "models": models,
                     "metrics": stats,
                     "config": {

@@ -70,7 +70,7 @@ if [[ ! -f "$HAB_AGY_SETTINGS" ]]; then
     mkdir -p "$(dirname "$HAB_AGY_SETTINGS")"
     cat > "$HAB_AGY_SETTINGS" <<'JSON_SETTINGS'
 {
-  "artifactReviewPolicy": "request-review",
+  "artifactReviewPolicy": "asks-for-review",
   "permissions": {"allow": []},
   "toolPermission": "strict",
   "trustedWorkspaces": []

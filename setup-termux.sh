@@ -93,7 +93,7 @@ if [[ $STANDALONE -eq 1 ]]; then
         set -e
         export DEBIAN_FRONTEND=noninteractive
         apt-get update -y >/dev/null 2>&1
-        apt-get install -y python3 python3-pip python3-venv git curl >/dev/null 2>&1
+        apt-get install -y python3 python3-pip python3-venv git curl ca-certificates >/dev/null 2>&1
 
         # Install Antigravity CLI
         if ! command -v agy >/dev/null 2>&1; then

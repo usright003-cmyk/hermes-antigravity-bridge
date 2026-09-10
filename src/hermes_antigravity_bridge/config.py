@@ -99,8 +99,16 @@ class AntigravityConfig:
     runtime_dir: Path = field(default_factory=_default_runtime_dir)
     model_cache_ttl_seconds: int = 60
     max_attempts: int = 3
-    validated_versions: tuple[str, ...] = ("1.1.17", "1.1.28")
+    validated_versions: tuple[str, ...] = (
+        "1.1.17",
+        "1.1.26",
+        "1.1.27",
+        "1.1.28",
+        "1.1.29",
+        "1.1.30",
+    )
     allow_unvalidated_versions: bool = False
+    wrapper: tuple[str, ...] = ()
 
     @property
     def settings_file(self) -> Path:
@@ -188,7 +196,24 @@ class BridgeConfig:
 
             discovered = shutil.which(binary_value)
             if not discovered:
-                raise ConfigurationError(f"Antigravity binary was not found on PATH: {binary_value}")
+                # Search standard fallback locations (Linux, macOS, Windows, Termux)
+                candidates = [
+                    Path.home() / ".local" / "bin" / binary_value,
+                    Path("/usr/local/bin") / binary_value,
+                    Path("/usr/bin") / binary_value,
+                    Path.home() / "AppData" / "Local" / "agy" / "bin" / f"{binary_value}.exe",
+                    Path.home() / "AppData" / "Local" / "agy" / "bin" / binary_value,
+                    Path.home() / ".local" / "bin" / f"{binary_value}.exe",
+                ]
+                for cand in candidates:
+                    if cand.is_file() and os.access(cand, os.X_OK):
+                        discovered = str(cand)
+                        break
+            if not discovered:
+                raise ConfigurationError(
+                    f"Antigravity binary was not found on PATH: {binary_value}. "
+                    "Ensure 'agy' is installed or set AGY_BINARY to its full path."
+                )
             binary = Path(discovered)
 
         sandbox = _as_bool(
@@ -284,7 +309,8 @@ class BridgeConfig:
                 maximum=64,
             ),
         )
-        validated_versions_value = agy_raw.get("validated_versions", ["1.1.17", "1.1.28"])
+        default_versions = ["1.1.17", "1.1.26", "1.1.27", "1.1.28", "1.1.29", "1.1.30"]
+        validated_versions_value = agy_raw.get("validated_versions", default_versions)
         if not isinstance(validated_versions_value, list) or not validated_versions_value:
             raise ConfigurationError("antigravity.validated_versions must be a non-empty array")
         validated_versions = tuple(str(value).strip() for value in validated_versions_value)
@@ -294,6 +320,13 @@ class BridgeConfig:
             env.get("AGY_ALLOW_UNVALIDATED_VERSIONS", agy_raw.get("allow_unvalidated_versions", False)),
             name="antigravity.allow_unvalidated_versions",
         )
+        wrapper_raw = agy_raw.get("wrapper", [])
+        if isinstance(wrapper_raw, str):
+            wrapper = (wrapper_raw.strip(),) if wrapper_raw.strip() else ()
+        elif isinstance(wrapper_raw, (list, tuple)):
+            wrapper = tuple(str(x).strip() for x in wrapper_raw if str(x).strip())
+        else:
+            raise ConfigurationError("antigravity.wrapper must be an array of strings")
 
         antigravity = AntigravityConfig(
             binary=binary,
@@ -335,6 +368,7 @@ class BridgeConfig:
             ),
             validated_versions=validated_versions,
             allow_unvalidated_versions=allow_unvalidated_versions,
+            wrapper=wrapper,
         )
         if not antigravity.default_model:
             raise ConfigurationError("antigravity.default_model must not be empty")

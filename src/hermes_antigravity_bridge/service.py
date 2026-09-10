@@ -97,7 +97,9 @@ class ChatCompletionService:
             tools.append(dict(tool))
         return tools
 
-    def validate_request(self, body: Any) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+    def validate_request(
+        self, body: Any
+    ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], str | None]:
         if not isinstance(body, dict):
             raise InvalidRequest("request body must be a JSON object")
         unsupported = sorted(set(body) - _ALLOWED_FIELDS)
@@ -190,12 +192,17 @@ class ChatCompletionService:
             len(prompt),
             max_chars,
         )
-        kwargs = {}
         if reasoning_effort is not None:
-            kwargs["effort"] = reasoning_effort
-        try:
-            backend_result = self.backend.generate(prompt, actual_model, **kwargs)
-        except TypeError:
+            kwargs = {"effort": reasoning_effort}
+            try:
+                backend_result = self.backend.generate(prompt, actual_model, **kwargs)
+            except TypeError as exc:
+                msg = str(exc).lower()
+                if "effort" in msg or "unexpected keyword argument" in msg:
+                    backend_result = self.backend.generate(prompt, actual_model)
+                else:
+                    raise
+        else:
             backend_result = self.backend.generate(prompt, actual_model)
         allowed_names = {
             str(tool["function"]["name"])
@@ -250,12 +257,17 @@ class ChatCompletionService:
         }
 
         if hasattr(self.backend, "generate_stream"):
-            kwargs = {}
             if reasoning_effort is not None:
-                kwargs["effort"] = reasoning_effort
-            try:
-                stream_gen = self.backend.generate_stream(prompt, actual_model, **kwargs)
-            except TypeError:
+                kwargs = {"effort": reasoning_effort}
+                try:
+                    stream_gen = self.backend.generate_stream(prompt, actual_model, **kwargs)
+                except TypeError as exc:
+                    msg = str(exc).lower()
+                    if "effort" in msg or "unexpected keyword argument" in msg:
+                        stream_gen = self.backend.generate_stream(prompt, actual_model)
+                    else:
+                        raise
+            else:
                 stream_gen = self.backend.generate_stream(prompt, actual_model)
             accumulated_text = ""
             streamed_text = ""
@@ -350,7 +362,17 @@ class ChatCompletionService:
                         }
                     return
         else:
-            backend_result = self.backend.generate(prompt, actual_model)
+            if reasoning_effort is not None:
+                try:
+                    backend_result = self.backend.generate(prompt, actual_model, effort=reasoning_effort)
+                except TypeError as exc:
+                    msg = str(exc).lower()
+                    if "effort" in msg or "unexpected keyword argument" in msg:
+                        backend_result = self.backend.generate(prompt, actual_model)
+                    else:
+                        raise
+            else:
+                backend_result = self.backend.generate(prompt, actual_model)
             parsed = parse_tool_calls(
                 backend_result.response,
                 allowed_tool_names=allowed_names,

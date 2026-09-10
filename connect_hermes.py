@@ -24,15 +24,7 @@ if sys.platform == "win32":
 try:
     import yaml
 except ImportError:
-    try:
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "pyyaml"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        import yaml
-    except (subprocess.SubprocessError, ImportError, OSError):
-        yaml = None
+    yaml = None
 
 
 def _dump_scalar_fallback(val: Any) -> str:
@@ -739,7 +731,8 @@ def ensure_antigravity_auth(agy_bin: str, poll_timeout_seconds: int = 30) -> boo
             print("[+] Antigravity Google authentication confirmed!")
             return True
 
-    print("[!] Notice: jetski_state.pbtxt not detected yet. Proceeding with setup...")
+    print("[!] Notice: Google authentication pending activation (jetski_state.pbtxt not detected yet).")
+    print("    Setup will proceed, but please run 'agy' to complete sign-in before using the bridge.")
     return False
 
 
@@ -820,18 +813,29 @@ def main() -> int:
             print(f"    - {dl}")
 
     print("=" * 65)
-    print("SUCCESS! Hermes Agent is now fully connected to Antigravity!")
+    if is_antigravity_authenticated():
+        print("SUCCESS! Hermes Agent is now fully connected to Antigravity!")
+    else:
+        print("SETUP COMPLETE (AUTHENTICATION PENDING)")
+        print("Hermes-Antigravity Bridge is configured, but Google sign-in is pending activation.")
+        print("Please run 'agy' in your terminal to complete Google authentication.")
     print("=" * 65)
     print("\nHow to run:")
     print(f"  1. Double click '{batch_path.name}' to start the bridge on this PC (console).")
     print(f"     OR double click '{bg_vbs_path.name}' to run silently in the background.")
     print("  2. Open any terminal and run 'hermes'. Enjoy!")
     if lan_ip != "127.0.0.1":
+        masked_token = (token[:4] + "..." + token[-4:]) if len(token) > 8 else "***"
         print("\n" + "-" * 65)
         print("📱 Android / Termux Quick Connect:")
         print(f"  1. Double click '{lan_batch_path.name}' to allow phone connections.")
         print("  2. In Termux on your Android phone (same Wi-Fi), run:")
-        print(f"     curl -sSL https://raw.githubusercontent.com/usright003-cmyk/hermes-antigravity-bridge/main/setup-termux.sh | bash -s -- --endpoint http://{lan_ip}:8765/v1 --token {token}")
+        print(f"     curl -sSL https://raw.githubusercontent.com/usright003-cmyk/hermes-antigravity-bridge/main/setup-termux.sh | bash -s -- --endpoint http://{lan_ip}:8765/v1 --token <YOUR_TOKEN>")
+        print(f"     (Your bridge token: {masked_token} — see config/bridge.toml)")
+        print("  3. Security Tip: To avoid plaintext token exposure in shell history, pass via env:")
+        print("     export HERMES_ANTIGRAVITY_BRIDGE_TOKEN=\"<YOUR_TOKEN>\"")
+        print(f"     curl -sSL https://raw.githubusercontent.com/usright003-cmyk/hermes-antigravity-bridge/main/setup-termux.sh | bash -s -- --endpoint http://{lan_ip}:8765/v1")
+        print("     or define HERMES_ANTIGRAVITY_BRIDGE_TOKEN in your .env configuration.")
         print("-" * 65 + "\n")
     return 0
 

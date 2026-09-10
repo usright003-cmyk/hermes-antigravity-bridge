@@ -6,9 +6,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from hermes_antigravity_bridge.backends.antigravity import AntigravityBackend
+from hermes_antigravity_bridge.backends.antigravity import (
+    DEFAULT_ANTIGRAVITY_MODELS,
+    AntigravityBackend,
+)
 from hermes_antigravity_bridge.config import AntigravityConfig
 from hermes_antigravity_bridge.errors import (
+    BackendError,
     BackendProtocolError,
     BackendTimeout,
     ToolIsolationError,
@@ -243,6 +247,69 @@ class AntigravityBackendTests(unittest.TestCase):
                 self.assertTrue(synced_jetski.exists())
                 self.assertEqual(synced_jetski.read_text(encoding="utf-8"), "token: new_auth_token\n")
                 self.assertTrue(synced_settings.exists())
+
+    def test_streaming_retry_guard_prevents_duplicate_tokens(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = self.make_backend(Path(tmp))
+            call_count = [0]
+
+            def failing_stream_after_chunk(*args, **kwargs):
+                call_count[0] += 1
+                yield {"type": "delta", "content": "first_part"}
+                raise BackendError("503 Service Unavailable: transient stream failure")
+
+            with patch.object(backend, "_stream_attempt", side_effect=failing_stream_after_chunk):
+                gen = backend.generate_stream("test prompt", "gemini-test-high")
+                first = next(gen)
+                self.assertEqual(first["content"], "first_part")
+                with self.assertRaisesRegex(BackendError, "503 Service Unavailable"):
+                    next(gen)
+                # Ensure it did NOT retry and duplicate tokens
+                self.assertEqual(call_count[0], 1)
+
+    def test_streaming_retries_when_zero_chunks_yielded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = self.make_backend(Path(tmp), max_attempts=2)
+            attempts = [0]
+
+            def fail_then_succeed(*args, **kwargs):
+                attempts[0] += 1
+                if attempts[0] == 1:
+                    raise BackendError("503 Service Unavailable")
+                yield {"type": "delta", "content": "recovered"}
+
+            with (
+                patch.object(backend, "_stream_attempt", side_effect=fail_then_succeed),
+                patch("time.sleep"),
+            ):
+                events = list(backend.generate_stream("test prompt", "gemini-test-high"))
+                self.assertEqual(len(events), 1)
+                self.assertEqual(events[0]["content"], "recovered")
+                self.assertEqual(attempts[0], 2)
+
+    def test_model_discovery_failure_sets_fallback_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = self.make_backend(Path(tmp))
+            with patch("subprocess.run", side_effect=OSError("binary exec failed")):
+                models = backend.list_models(force_refresh=True)
+                self.assertEqual(models, DEFAULT_ANTIGRAVITY_MODELS)
+                self.assertEqual(backend.model_source, "fallback")
+
+    def test_readiness_reports_degraded_when_fallback_model_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = self.make_backend(Path(tmp))
+            # Even if authenticated, if model_source is fallback, readiness must report degraded
+            backend._model_source = "fallback"
+            with (
+                patch.object(backend, "is_authenticated", return_value=True),
+                patch.object(backend, "list_models", return_value=DEFAULT_ANTIGRAVITY_MODELS),
+            ):
+                readiness = backend.readiness()
+                self.assertEqual(readiness["status"], "degraded")
+                self.assertTrue(readiness["authenticated"])
+                self.assertEqual(readiness["model_source"], "fallback")
+                self.assertIn("reason", readiness)
+                self.assertIn("fallback", readiness["reason"])
 
 
 if __name__ == "__main__":

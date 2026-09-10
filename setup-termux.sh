@@ -18,7 +18,7 @@ echo -e "${CYAN}================================================================
 # Parse flags
 STANDALONE=0
 ENDPOINT=""
-TOKEN=""
+TOKEN="${HERMES_ANTIGRAVITY_BRIDGE_TOKEN:-}"
 MODEL="gemini-3.8-flash"
 
 while [[ $# -gt 0 ]]; do
@@ -219,11 +219,14 @@ echo -e "${YELLOW}[*] Remote PC / Server Bridge Configuration...${NC}"
 
 if [[ -z "$ENDPOINT" ]]; then
     read -rp "Enter Bridge IP & Port [e.g. http://192.168.0.5:8765/v1]: " ENDPOINT
+fi
+
+if [[ -z "$TOKEN" || "$TOKEN" == "<YOUR_TOKEN>" ]]; then
     read -rp "Enter Bridge Bearer Token: " TOKEN
 fi
 
-if [[ -z "$ENDPOINT" || -z "$TOKEN" ]]; then
-    echo -e "\033[0;31m[!] Error: Both endpoint and token are required for remote mode.\033[0m"
+if [[ -z "$ENDPOINT" || -z "$TOKEN" || "$TOKEN" == "<YOUR_TOKEN>" ]]; then
+    echo -e "\033[0;31m[!] Error: Both endpoint and valid token are required for remote mode.\033[0m"
     exit 1
 fi
 

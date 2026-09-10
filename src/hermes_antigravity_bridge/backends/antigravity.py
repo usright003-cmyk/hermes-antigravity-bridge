@@ -327,8 +327,8 @@ class AntigravityBackend:
             cached_at, cached = self._model_cache
             if cached and not force_refresh and now - cached_at < self.config.model_cache_ttl_seconds:
                 return cached
-            runtime = self._ensure_runtime()
             try:
+                runtime = self._ensure_runtime()
                 completed = subprocess.run(
                     self._binary_command_prefix() + ["models"],
                     cwd=runtime,
@@ -339,7 +339,7 @@ class AntigravityBackend:
                     check=False,
                 )
                 models = parse_model_ids(completed.stdout) if completed.returncode == 0 else ()
-            except (OSError, subprocess.TimeoutExpired):
+            except (OSError, subprocess.TimeoutExpired, Exception):  # noqa: BLE001 - fallback if binary discovery fails
                 models = ()
             if models:
                 self._model_source = "discovered"
@@ -464,7 +464,8 @@ class AntigravityBackend:
             )
         models = self.list_models(force_refresh=True)
         authenticated = self.is_authenticated()
-        status = "ready" if authenticated else "degraded"
+        is_ready = bool(authenticated and self._model_source != "fallback")
+        status = "ready" if is_ready else "degraded"
         result: dict[str, Any] = {
             "status": status,
             "authenticated": authenticated,
@@ -477,6 +478,8 @@ class AntigravityBackend:
         }
         if not authenticated:
             result["reason"] = "authentication required; run 'agy' to sign in"
+        elif self._model_source == "fallback":
+            result["reason"] = "running on fallback models without confirmed binary execution"
         return result
 
     def _terminate(self, process: subprocess.Popen[str]) -> None:
@@ -707,15 +710,20 @@ class AntigravityBackend:
         self._verify_if_required()
         runtime = self._ensure_runtime()
         last_error: BackendError | None = None
+        yielded_chunks = 0
         for attempt in range(1, self.config.max_attempts + 1):
             with tempfile.TemporaryDirectory(
                 prefix="request-", dir=runtime, ignore_cleanup_errors=True
             ) as request_dir:
                 try:
-                    yield from self._stream_attempt(prompt, model, Path(request_dir), effort=effort)
+                    for chunk in self._stream_attempt(prompt, model, Path(request_dir), effort=effort):
+                        yielded_chunks += 1
+                        yield chunk
                     return
                 except BackendError as exc:
                     last_error = exc
+                    if yielded_chunks > 0:
+                        raise
                     transient = any(marker in str(exc).lower() for marker in _TRANSIENT_MARKERS)
                     if transient and attempt < self.config.max_attempts:
                         time.sleep(min(1.5 * attempt, 5.0))

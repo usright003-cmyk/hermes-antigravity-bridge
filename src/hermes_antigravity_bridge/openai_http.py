@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import json
 import logging
 import socket
@@ -11,7 +12,7 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from . import __version__
 from .config import BridgeConfig
@@ -19,6 +20,15 @@ from .errors import BackendError, BridgeError
 from .service import ChatCompletionService
 
 _LOG = logging.getLogger(__name__)
+
+
+def _is_loopback_ip(ip: str) -> bool:
+    if not ip or ip in {"127.0.0.1", "localhost", "::1"}:
+        return True
+    try:
+        return ipaddress.ip_address(ip).is_loopback
+    except ValueError:
+        return False
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -264,7 +274,7 @@ function formatUptime(sec) {
 }
 async function pollMetrics() {
   try {
-    const res = await fetch('/api/metrics');
+    const res = await fetch('/api/metrics' + window.location.search);
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
     document.getElementById('version-badge').textContent = 'v' + data.version;
@@ -287,6 +297,16 @@ async function pollMetrics() {
       li.className = 'model-item';
       li.textContent = 'None detected (check agy)';
       container.appendChild(li);
+    }
+    const sb = document.getElementById('status-badge');
+    if (data.status === 'degraded') {
+      sb.textContent = '\\u25CF DEGRADED';
+      sb.style.color = '#d29922';
+      sb.style.borderColor = 'rgba(210, 153, 34, 0.3)';
+    } else {
+      sb.textContent = '\\u25CF ONLINE';
+      sb.style.color = '#3fb950';
+      sb.style.borderColor = 'rgba(63, 185, 80, 0.3)';
     }
   } catch (err) {
     const sb = document.getElementById('status-badge');
@@ -416,13 +436,27 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         self.bridge_server.metrics.record_error()
         self._send(status, {"error": {"message": message, "type": error_type}})
 
-    def _authorized(self) -> bool:
+    def _authorized(self, *, allow_query_token: bool = False) -> bool:
+        expected = self.bridge_server.bridge_config.server.token
+        expected_bearer = f"Bearer {expected}"
         supplied = self.headers.get("Authorization", "")
-        expected = f"Bearer {self.bridge_server.bridge_config.server.token}"
-        return hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8"))
+        if hmac.compare_digest(supplied.encode("utf-8"), expected_bearer.encode("utf-8")):
+            return True
+        if allow_query_token:
+            query = urlsplit(self.path).query
+            params = parse_qs(query)
+            token_params = params.get("token", [])
+            if token_params and hmac.compare_digest(
+                token_params[0].encode("utf-8"), expected.encode("utf-8")
+            ):
+                return True
+        return False
 
-    def _require_auth(self) -> bool:
-        if self._authorized():
+    def _authenticate(self, *, allow_query_token: bool = False) -> bool:
+        return self._authorized(allow_query_token=allow_query_token)
+
+    def _require_auth(self, *, allow_query_token: bool = False) -> bool:
+        if self._authenticate(allow_query_token=allow_query_token):
             return True
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -435,25 +469,40 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = urlsplit(self.path).path
-        if path in {"/dashboard", "/"}:
+        client_ip = (
+            self.client_address[0]
+            if isinstance(self.client_address, tuple) and self.client_address
+            else ""
+        )
+        is_remote = (
+            self.bridge_server.bridge_config.server.allow_remote
+            or not _is_loopback_ip(client_ip)
+        )
+
+        if path in {"/dashboard", "/dashboard/", "/"}:
+            if is_remote and not self._require_auth(allow_query_token=True):
+                return
             self._send(200, _DASHBOARD_HTML, content_type="text/html; charset=utf-8")
             return
         if path == "/api/metrics":
+            if is_remote and not self._require_auth(allow_query_token=True):
+                return
             stats = self.bridge_server.metrics.snapshot()
-            backend = getattr(self.bridge_server.chat_service, "backend", None)
-            model_source = getattr(backend, "model_source", "unknown")
-            is_auth_func = getattr(backend, "is_authenticated", None)
-            authenticated = is_auth_func() if callable(is_auth_func) else True
             try:
                 models = self.bridge_server.chat_service.list_models()
             except Exception:  # noqa: BLE001
                 models = []
+            backend = getattr(self.bridge_server.chat_service, "backend", None)
+            model_source = getattr(backend, "model_source", "unknown")
+            is_auth_func = getattr(backend, "is_authenticated", None)
+            authenticated = is_auth_func() if callable(is_auth_func) else True
+            is_online = bool(authenticated and model_source != "fallback")
             self._send(
                 200,
                 {
                     "service": "hermes-antigravity-bridge",
                     "version": __version__,
-                    "status": "online" if authenticated else "degraded",
+                    "status": "online" if is_online else "degraded",
                     "authenticated": authenticated,
                     "model_source": model_source,
                     "models": models,
@@ -482,7 +531,20 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             if not self._require_auth():
                 return
             try:
-                self._send(200, self.bridge_server.chat_service.readiness())
+                readiness = self.bridge_server.chat_service.readiness()
+                backend = getattr(self.bridge_server.chat_service, "backend", None)
+                model_source = getattr(backend, "model_source", readiness.get("model_source", "unknown"))
+                is_auth_func = getattr(backend, "is_authenticated", None)
+                authenticated = is_auth_func() if callable(is_auth_func) else readiness.get("authenticated", True)
+                if not authenticated or model_source == "fallback":
+                    readiness["status"] = "degraded"
+                    if not authenticated:
+                        readiness.setdefault("reason", "authentication required; run 'agy' to sign in")
+                    elif model_source == "fallback":
+                        readiness.setdefault(
+                            "reason", "running on fallback models without confirmed binary execution"
+                        )
+                self._send(200, readiness)
             except BridgeError as exc:
                 self._error(exc.status_code, _safe_client_message(exc), exc.error_type)
             return
@@ -613,6 +675,9 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             body = json.loads(raw)
         except (json.JSONDecodeError, UnicodeDecodeError):
             self._error(400, "request body is not valid UTF-8 JSON", "invalid_request_error")
+            return
+        if not isinstance(body, dict):
+            self._error(400, "request body must be a JSON object", "invalid_request_error")
             return
         if bool(body.get("stream")):
             self._stream_response(body)

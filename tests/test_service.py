@@ -1,3 +1,4 @@
+import typing
 import unittest
 
 from hermes_antigravity_bridge.contracts import BackendResponse
@@ -127,6 +128,160 @@ class ChatCompletionServiceTests(unittest.TestCase):
             "frequency_penalty": 0.0,
         })
         self.assertEqual(result.text, "OK")
+
+    def test_validate_request_return_type_and_annotation(self):
+        hints = typing.get_type_hints(ChatCompletionService.validate_request)
+        expected_type = tuple[str, list[dict[str, typing.Any]], list[dict[str, typing.Any]], str | None]
+        self.assertEqual(hints["return"], expected_type)
+
+        service, _ = self.make_service()
+        ret = service.validate_request({
+            "model": "model-a",
+            "messages": [{"role": "user", "content": "hi"}],
+            "reasoning_effort": "high",
+        })
+        self.assertIsInstance(ret, tuple)
+        model, messages, tools, effort = ret
+        self.assertEqual(model, "model-a")
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(tools, [])
+        self.assertEqual(effort, "high")
+
+    def test_strict_type_error_handling_on_effort_kwarg(self):
+        call_count = {"complete": 0, "stream": 0}
+
+        class EffortRejectingBackend(FakeBackend):
+            def generate(self, prompt, model, **kwargs):
+                call_count["complete"] += 1
+                if "effort" in kwargs:
+                    raise TypeError("generate() got an unexpected keyword argument 'effort'")
+                return super().generate(prompt, model)
+
+            def generate_stream(self, prompt, model, **kwargs):
+                call_count["stream"] += 1
+                if "effort" in kwargs:
+                    raise TypeError("generate_stream() got an unexpected keyword argument 'effort'")
+                return iter([{"type": "delta", "content": "streamed"}])
+
+        backend = EffortRejectingBackend()
+        service = ChatCompletionService(
+            backend=backend,
+            prompt_builder=HermesPromptBuilder(),
+            prompt_budget=PromptBudget(),
+        )
+
+        # 1. Effort kwarg TypeError is caught and retried without effort
+        res = service.complete({
+            "model": "model-a",
+            "reasoning_effort": "high",
+            "messages": [{"role": "user", "content": "hi"}],
+        })
+        self.assertEqual(res.text, "OK")
+        self.assertEqual(call_count["complete"], 2)
+
+        events = list(service.complete_stream({
+            "model": "model-a",
+            "reasoning_effort": "high",
+            "stream": True,
+            "messages": [{"role": "user", "content": "hi"}],
+        }))
+        self.assertTrue(any(e.get("content") == "streamed" for e in events))
+        self.assertEqual(call_count["stream"], 2)
+
+        # 2. Unrelated internal TypeError is NOT masked and NOT retried
+        internal_calls = {"complete": 0, "stream": 0}
+
+        class BrokenInternalBackend(FakeBackend):
+            def generate(self, prompt, model, **kwargs):
+                internal_calls["complete"] += 1
+                raise TypeError("unsupported operand type(s) for +: 'int' and 'str'")
+
+            def generate_stream(self, prompt, model, **kwargs):
+                internal_calls["stream"] += 1
+                raise TypeError("unsupported operand type(s) for +: 'int' and 'str'")
+
+        broken_service = ChatCompletionService(
+            backend=BrokenInternalBackend(),
+            prompt_builder=HermesPromptBuilder(),
+            prompt_budget=PromptBudget(),
+        )
+
+        with self.assertRaisesRegex(TypeError, "unsupported operand"):
+            broken_service.complete({
+                "model": "model-a",
+                "reasoning_effort": "high",
+                "messages": [{"role": "user", "content": "hi"}],
+            })
+        self.assertEqual(internal_calls["complete"], 1)
+
+        with self.assertRaisesRegex(TypeError, "unsupported operand"):
+            list(broken_service.complete_stream({
+                "model": "model-a",
+                "reasoning_effort": "high",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hi"}],
+            }))
+        self.assertEqual(internal_calls["stream"], 1)
+
+        # 3. When reasoning_effort is None, unexpected keyword argument TypeError is NOT retried
+        no_effort_calls = {"complete": 0, "stream": 0}
+
+        class InternalKwargErrorBackend(FakeBackend):
+            def generate(self, prompt, model, **kwargs):
+                no_effort_calls["complete"] += 1
+                raise TypeError("internal_function() got an unexpected keyword argument 'debug'")
+
+            def generate_stream(self, prompt, model, **kwargs):
+                no_effort_calls["stream"] += 1
+                raise TypeError("internal_function() got an unexpected keyword argument 'debug'")
+
+        no_effort_service = ChatCompletionService(
+            backend=InternalKwargErrorBackend(),
+            prompt_builder=HermesPromptBuilder(),
+            prompt_budget=PromptBudget(),
+        )
+
+        with self.assertRaisesRegex(TypeError, "unexpected keyword argument 'debug'"):
+            no_effort_service.complete({
+                "model": "model-a",
+                "messages": [{"role": "user", "content": "hi"}],
+            })
+        self.assertEqual(no_effort_calls["complete"], 1)
+
+        with self.assertRaisesRegex(TypeError, "unexpected keyword argument 'debug'"):
+            list(no_effort_service.complete_stream({
+                "model": "model-a",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hi"}],
+            }))
+        self.assertEqual(no_effort_calls["stream"], 1)
+
+        # 4. Non-streaming backend in complete_stream handles effort and fallback
+        non_stream_calls = {"count": 0}
+
+        class NonStreamingEffortBackend(FakeBackend):
+            def generate(self, prompt, model, **kwargs):
+                non_stream_calls["count"] += 1
+                if "effort" in kwargs:
+                    raise TypeError("generate() got an unexpected keyword argument 'effort'")
+                return super().generate(prompt, model)
+
+        non_stream_backend = NonStreamingEffortBackend()
+        if hasattr(non_stream_backend, "generate_stream"):
+            delattr(non_stream_backend, "generate_stream")
+
+        non_stream_service = ChatCompletionService(
+            backend=non_stream_backend,
+            prompt_builder=HermesPromptBuilder(),
+            prompt_budget=PromptBudget(),
+        )
+        events = list(non_stream_service.complete_stream({
+            "model": "model-a",
+            "reasoning_effort": "high",
+            "messages": [{"role": "user", "content": "hi"}],
+        }))
+        self.assertTrue(any(e.get("content") == "OK" for e in events))
+        self.assertEqual(non_stream_calls["count"], 2)
 
 
 if __name__ == "__main__":

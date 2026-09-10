@@ -126,6 +126,127 @@ class HTTPContractTests(unittest.TestCase):
             ["model-a", "model-b"],
         )
 
+    def test_dashboard_and_metrics_local_access(self):
+        status, _, body = self.request("/dashboard")
+        self.assertEqual(status, 200)
+        self.assertIn("Hermes Antigravity Bridge", body.decode("utf-8"))
+
+        status, _, body = self.request("/dashboard/")
+        self.assertEqual(status, 200)
+        self.assertIn("Hermes Antigravity Bridge", body.decode("utf-8"))
+
+        status, _, body = self.request("/")
+        self.assertEqual(status, 200)
+
+        status, _, body = self.request("/api/metrics")
+        self.assertEqual(status, 200)
+        metrics_data = json.loads(body)
+        self.assertEqual(metrics_data["status"], "online")
+        self.assertIn("metrics", metrics_data)
+
+    def test_dashboard_and_metrics_remote_access_authentication(self):
+        object.__setattr__(self.server.bridge_config.server, "allow_remote", True)
+        try:
+            # Unauthenticated requests are rejected with 401
+            for path in ("/dashboard", "/dashboard/", "/", "/api/metrics"):
+                with self.subTest(path=path, auth="none"):
+                    status, _, body = self.request(path)
+                    self.assertEqual(status, 401)
+                    self.assertEqual(json.loads(body)["error"]["type"], "auth_error")
+
+            # Bearer token succeeds
+            for path in ("/dashboard", "/dashboard/", "/", "/api/metrics"):
+                with self.subTest(path=path, auth="bearer"):
+                    status, _, _ = self.request(path, auth=True)
+                    self.assertEqual(status, 200)
+
+            # Query parameter ?token= succeeds
+            for path in ("/dashboard", "/dashboard/", "/", "/api/metrics"):
+                with self.subTest(path=path, auth="query_token"):
+                    status, _, _ = self.request(f"{path}?token={self.token}")
+                    self.assertEqual(status, 200)
+
+            # Invalid query token is rejected
+            for path in ("/dashboard", "/dashboard/", "/", "/api/metrics"):
+                with self.subTest(path=path, auth="invalid_query_token"):
+                    status, _, _ = self.request(f"{path}?token=bad-token")
+                    self.assertEqual(status, 401)
+        finally:
+            object.__setattr__(self.server.bridge_config.server, "allow_remote", False)
+
+    def test_non_loopback_ip_requires_auth_even_if_allow_remote_is_false(self):
+        from unittest.mock import patch
+        self.assertFalse(self.server.bridge_config.server.allow_remote)
+        with patch("hermes_antigravity_bridge.openai_http._is_loopback_ip", return_value=False):
+            status, _, body = self.request("/dashboard")
+            self.assertEqual(status, 401)
+            self.assertEqual(json.loads(body)["error"]["type"], "auth_error")
+
+            status, _, _ = self.request(f"/dashboard?token={self.token}")
+            self.assertEqual(status, 200)
+
+    def test_is_loopback_ip_utility(self):
+        from hermes_antigravity_bridge.openai_http import _is_loopback_ip
+        self.assertTrue(_is_loopback_ip("127.0.0.1"))
+        self.assertTrue(_is_loopback_ip("localhost"))
+        self.assertTrue(_is_loopback_ip("::1"))
+        self.assertTrue(_is_loopback_ip(""))
+        self.assertFalse(_is_loopback_ip("192.168.1.150"))
+        self.assertFalse(_is_loopback_ip("10.0.0.2"))
+        self.assertFalse(_is_loopback_ip("not-an-ip"))
+
+    def test_metrics_evaluates_model_source_after_discovery(self):
+        class DynamicFallbackBackend(FakeBackend):
+            def __init__(self):
+                self._source = "unknown"
+
+            @property
+            def model_source(self):
+                return self._source
+
+            def list_models(self, force_refresh=False):
+                self._source = "fallback"
+                return ("model-a",)
+
+        orig_backend = self.server.chat_service.backend
+        self.server.chat_service.backend = DynamicFallbackBackend()
+        try:
+            status, _, body = self.request("/api/metrics")
+            self.assertEqual(status, 200)
+            data = json.loads(body)
+            self.assertEqual(data["model_source"], "fallback")
+            self.assertEqual(data["status"], "degraded")
+        finally:
+            self.server.chat_service.backend = orig_backend
+
+    def test_metrics_and_ready_report_degraded_when_fallback_or_unauthenticated(self):
+        backend = self.server.chat_service.backend
+        # Simulate fallback model source
+        backend.model_source = "fallback"
+        try:
+            status, _, body = self.request("/api/metrics")
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)["status"], "degraded")
+
+            status, _, body = self.request("/ready", auth=True)
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)["status"], "degraded")
+        finally:
+            delattr(backend, "model_source")
+
+        # Simulate unauthenticated backend
+        backend.is_authenticated = lambda: False
+        try:
+            status, _, body = self.request("/api/metrics")
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)["status"], "degraded")
+
+            status, _, body = self.request("/ready", auth=True)
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)["status"], "degraded")
+        finally:
+            delattr(backend, "is_authenticated")
+
     def test_hermes_model_discovery_compatibility_routes(self):
         for path in ("/api/v1/models", "/api/tags", "/version", "/api/version"):
             with self.subTest(path=path):
@@ -208,6 +329,20 @@ class HTTPContractTests(unittest.TestCase):
             ],
             413,
         )
+
+    def test_chat_completions_rejects_non_dict_json(self):
+        for invalid_body in ([], "just a string", 123, True):
+            with self.subTest(invalid_body=invalid_body):
+                status, _, body = self.request(
+                    "/v1/chat/completions",
+                    method="POST",
+                    auth=True,
+                    body=invalid_body,
+                )
+                self.assertEqual(status, 400)
+                parsed = json.loads(body)
+                self.assertIn("request body must be a JSON object", parsed["error"]["message"])
+                self.assertEqual(parsed["error"]["type"], "invalid_request_error")
 
     def test_concurrency_limit_returns_429_without_starting_a_second_backend_call(self):
         token = TEST_TOKEN

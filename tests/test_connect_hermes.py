@@ -1,3 +1,5 @@
+import contextlib
+import io
 import sys
 import tempfile
 import unittest
@@ -339,6 +341,91 @@ custom_providers:
         with patch("sys.platform", "win32"), patch.dict("os.environ", {"OneDrive": str(self.root / "OneDrive")}):
             desktop = connect_hermes.get_desktop_dir()
             self.assertEqual(desktop, onedrive_desktop)
+
+    def test_setup_completion_banner_authenticated_vs_pending(self):
+        # 1. When authenticated is True
+        with (
+            patch("connect_hermes.is_antigravity_authenticated", return_value=True),
+            patch("connect_hermes.shutil.which", return_value="/usr/bin/agy"),
+            patch("connect_hermes.ensure_antigravity_auth", return_value=True),
+            patch("connect_hermes.setup_bridge", return_value=(self.root / "bridge.toml", "secret-token-123456789")),
+            patch("connect_hermes.find_hermes_config_path", return_value=None),
+            patch("connect_hermes.create_launcher_batch", return_value=self.root / "run.bat"),
+            patch("connect_hermes.create_lan_launcher_batch", return_value=self.root / "run-lan.bat"),
+            patch("connect_hermes.create_background_launcher_vbs", return_value=self.root / "run.vbs"),
+            patch("connect_hermes.create_desktop_launchers", return_value=[]),
+            patch("connect_hermes.get_lan_ip", return_value="127.0.0.1"),
+            patch("sys.argv", ["connect_hermes.py"]),
+        ):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                exit_code = connect_hermes.main()
+            self.assertEqual(exit_code, 0)
+            text = out.getvalue()
+            self.assertIn("SUCCESS! Hermes Agent is now fully connected to Antigravity!", text)
+            self.assertNotIn("SETUP COMPLETE (AUTHENTICATION PENDING)", text)
+
+        # 2. When authenticated is False
+        with (
+            patch("connect_hermes.is_antigravity_authenticated", return_value=False),
+            patch("connect_hermes.shutil.which", return_value="/usr/bin/agy"),
+            patch("connect_hermes.ensure_antigravity_auth", return_value=False),
+            patch("connect_hermes.setup_bridge", return_value=(self.root / "bridge.toml", "secret-token-123456789")),
+            patch("connect_hermes.find_hermes_config_path", return_value=None),
+            patch("connect_hermes.create_launcher_batch", return_value=self.root / "run.bat"),
+            patch("connect_hermes.create_lan_launcher_batch", return_value=self.root / "run-lan.bat"),
+            patch("connect_hermes.create_background_launcher_vbs", return_value=self.root / "run.vbs"),
+            patch("connect_hermes.create_desktop_launchers", return_value=[]),
+            patch("connect_hermes.get_lan_ip", return_value="127.0.0.1"),
+            patch("sys.argv", ["connect_hermes.py"]),
+        ):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                exit_code = connect_hermes.main()
+            self.assertEqual(exit_code, 0)
+            text = out.getvalue()
+            self.assertIn("SETUP COMPLETE (AUTHENTICATION PENDING)", text)
+            self.assertIn("Please run 'agy' in your terminal to complete Google authentication.", text)
+            self.assertNotIn("SUCCESS! Hermes Agent is now fully connected to Antigravity!", text)
+
+    def test_lan_instructions_mask_token_and_advise_env(self):
+        raw_token = "secret-token-123456789"
+        with (
+            patch("connect_hermes.is_antigravity_authenticated", return_value=True),
+            patch("connect_hermes.shutil.which", return_value="/usr/bin/agy"),
+            patch("connect_hermes.ensure_antigravity_auth", return_value=True),
+            patch("connect_hermes.setup_bridge", return_value=(self.root / "bridge.toml", raw_token)),
+            patch("connect_hermes.find_hermes_config_path", return_value=None),
+            patch("connect_hermes.create_launcher_batch", return_value=self.root / "run.bat"),
+            patch("connect_hermes.create_lan_launcher_batch", return_value=self.root / "run-lan.bat"),
+            patch("connect_hermes.create_background_launcher_vbs", return_value=self.root / "run.vbs"),
+            patch("connect_hermes.create_desktop_launchers", return_value=[]),
+            patch("connect_hermes.get_lan_ip", return_value="192.168.1.150"),
+            patch("sys.argv", ["connect_hermes.py"]),
+        ):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                connect_hermes.main()
+            text = out.getvalue()
+            # Must NOT expose raw plaintext token in the curl bash command
+            self.assertNotIn(f"--token {raw_token}", text)
+            # Must mask token in banner
+            self.assertIn("secr...6789", text)
+            # Must advise passing HERMES_ANTIGRAVITY_BRIDGE_TOKEN
+            self.assertIn("HERMES_ANTIGRAVITY_BRIDGE_TOKEN", text)
+
+    def test_ensure_antigravity_auth_pending_notice(self):
+        with (
+            patch("connect_hermes.is_antigravity_authenticated", return_value=False),
+            patch("subprocess.run"),
+        ):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                res = connect_hermes.ensure_antigravity_auth("agy", poll_timeout_seconds=0)
+            self.assertFalse(res)
+            text = out.getvalue()
+            self.assertIn("Google authentication pending activation", text)
+            self.assertIn("run 'agy'", text)
 
 
 if __name__ == "__main__":

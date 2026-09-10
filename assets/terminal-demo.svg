@@ -48,8 +48,7 @@
 
   <!-- Hermes Connection Section -->
   <text x="24" y="278" class="txt"><tspan class="purple">[Hermes Agent]</tspan> &lt;stream:open&gt; <tspan class="green">Typewriter Stream Active (TCP_NODELAY)</tspan></text>
-  <text x="24" y="306" class="txt"><tspan class="white" font-weight="bold">Hermes:</tspan> <tspan class="white">"Connected to Gemini 3.8 Flash. MEMORY.md verified. Sovereignty: 100%."</tspan></text>
-  <rect x="735" y="293" width="8" height="15" class="cursor" />
+  <text x="24" y="306" class="txt"><tspan class="white" font-weight="bold">Hermes:</tspan> <tspan class="white">"Connected to Gemini 3.8 Flash. MEMORY.md verified. Sovereignty: 100%." </tspan><tspan class="cursor">&#9608;</tspan></text>
 
   <!-- Metric Badges / Footer Info Card -->
   <rect x="24" y="340" width="752" height="75" class="card-bg" />

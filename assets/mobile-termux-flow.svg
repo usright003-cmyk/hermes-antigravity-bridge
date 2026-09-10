@@ -34,15 +34,15 @@
   <rect width="920" height="490" class="bg" />
   
   <!-- Header Bar -->
-  <rect width="920" height="44" class="header-bar" />
-  <circle cx="22" cy="22" r="6" class="dot-red" />
-  <circle cx="42" cy="22" r="6" class="dot-yellow" />
-  <circle cx="62" cy="22" r="6" class="dot-green" />
-  <text x="460" y="24" class="title">📱 100% Standalone Android (Termux) Superintelligence Architecture</text>
-  <text x="460" y="38" class="subtitle">Zero PC Dependency &#8226; Everything Runs on Smartphone &#8226; 1,000,000 Token DeepMind Context</text>
+  <rect width="920" height="48" class="header-bar" />
+  <circle cx="22" cy="24" r="6" class="dot-red" />
+  <circle cx="42" cy="24" r="6" class="dot-yellow" />
+  <circle cx="62" cy="24" r="6" class="dot-green" />
+  <text x="460" y="21" class="title">📱 100% Standalone Android (Termux) Superintelligence Architecture</text>
+  <text x="460" y="39" class="subtitle">Zero PC Dependency &#8226; Everything Runs on Smartphone &#8226; 1,000,000 Token DeepMind Context</text>
 
   <!-- Node 1: Termux Mobile Environment -->
-  <rect x="30" y="65" width="260" height="180" class="box-green" />
+  <rect x="30" y="65" width="250" height="180" class="box-green" />
   <text x="45" y="90" class="box-title" fill="#3fb950">📱 Android Phone (Termux)</text>
   <text x="45" y="110" class="box-desc">&#8226; PRoot Linux (Ubuntu ARM64)</text>
   <text x="45" y="130" class="box-desc">&#8226; Google Antigravity CLI (agy)</text>
@@ -53,11 +53,11 @@
   <text x="52" y="222" class="tag" fill="#ffffff">Self-Contained On Phone</text>
 
   <!-- Arrow 1 -> 2 -->
-  <line x1="290" y1="155" x2="335" y2="155" class="arrow" marker-end="url(#arrowhead)" />
-  <text x="295" y="145" class="tag" fill="#58a6ff">Loopback</text>
+  <line x1="280" y1="155" x2="335" y2="155" class="arrow" marker-end="url(#arrowhead)" />
+  <text x="312" y="145" class="tag" fill="#58a6ff" text-anchor="middle">Loopback</text>
 
   <!-- Node 2: Local Bridge Daemon inside Phone -->
-  <rect x="345" y="65" width="250" height="180" class="box-blue" />
+  <rect x="345" y="65" width="245" height="180" class="box-blue" />
   <text x="360" y="90" class="box-title" fill="#58a6ff">⚡ Local Bridge (127.0.0.1:8765)</text>
   <text x="360" y="110" class="box-desc">&#8226; Runs locally inside Termux</text>
   <text x="360" y="130" class="box-desc">&#8226; Subprocess `agy` IPC link</text>
@@ -68,66 +68,66 @@
   <text x="368" y="222" class="tag" fill="#ffffff">On-Device Local Daemon</text>
 
   <!-- Arrow 2 -> 3 -->
-  <line x1="595" y1="155" x2="640" y2="155" class="arrow-gold" marker-end="url(#arrowhead-gold)" />
-  <text x="600" y="145" class="tag" fill="#e3b341">Mobile Data</text>
+  <line x1="590" y1="155" x2="650" y2="155" class="arrow-gold" marker-end="url(#arrowhead-gold)" />
+  <text x="625" y="145" class="tag" fill="#e3b341" text-anchor="middle">Mobile Data</text>
 
   <!-- Node 3: Google DeepMind Cloud -->
-  <rect x="650" y="65" width="240" height="180" class="box-gold" />
-  <text x="665" y="90" class="box-title" fill="#e3b341">☁️ Google AI Cloud</text>
-  <text x="665" y="110" class="box-desc">&#8226; Gemini 3.8 Flash (High Think)</text>
-  <text x="665" y="130" class="box-desc">&#8226; 1,000,000 Token Context</text>
-  <text x="665" y="150" class="box-desc">&#8226; Claude Sonnet 4.6 Thinking</text>
-  <text x="665" y="170" class="box-desc">&#8226; Zero Subscription / API fees</text>
-  <text x="665" y="190" class="box-desc">&#8226; Pure Cloud Compute</text>
-  <rect x="665" y="208" width="155" height="20" rx="4" fill="#9e6a03" />
-  <text x="672" y="222" class="tag" fill="#ffffff">Infinite Context Core</text>
+  <rect x="660" y="65" width="230" height="180" class="box-gold" />
+  <text x="675" y="90" class="box-title" fill="#e3b341">☁️ Google AI Cloud</text>
+  <text x="675" y="110" class="box-desc">&#8226; Gemini 3.8 Flash (High Think)</text>
+  <text x="675" y="130" class="box-desc">&#8226; 1,000,000 Token Context</text>
+  <text x="675" y="150" class="box-desc">&#8226; Claude Sonnet 4.6 Thinking</text>
+  <text x="675" y="170" class="box-desc">&#8226; Zero Subscription / API fees</text>
+  <text x="675" y="190" class="box-desc">&#8226; Pure Cloud Compute</text>
+  <rect x="675" y="208" width="155" height="20" rx="4" fill="#9e6a03" />
+  <text x="682" y="222" class="tag" fill="#ffffff">Infinite Context Core</text>
 
   <!-- Bottom Flow: The Round-Trip Superintelligence Stream -->
   <rect x="30" y="265" width="860" height="200" class="box" />
   <text x="45" y="293" class="box-title" fill="#3fb950">🚀 Daily Mobile Workflow: Just 1 Word on Your Phone</text>
 
   <!-- Step 1 -->
-  <rect x="45" y="310" width="180" height="135" rx="6" fill="#21262d" stroke="#30363d" />
-  <text x="55" y="331" class="tag" fill="#3fb950">1. OPEN TERMUX</text>
-  <text x="55" y="353" class="box-desc">Open Termux on Android</text>
-  <text x="55" y="373" class="box-desc">Type single command:</text>
-  <text x="55" y="393" class="box-desc" fill="#3fb950">&gt; start-hermes</text>
-  <text x="55" y="413" class="box-desc">No PC connection needed!</text>
-  <text x="55" y="430" class="box-desc">Works on Wi-Fi or 4G/5G</text>
+  <rect x="45" y="308" width="180" height="142" rx="6" fill="#21262d" stroke="#30363d" />
+  <text x="55" y="328" class="tag" fill="#3fb950">1. OPEN TERMUX</text>
+  <text x="55" y="348" class="box-desc">Open Termux on Android</text>
+  <text x="55" y="368" class="box-desc">Type single command:</text>
+  <text x="55" y="388" class="box-desc" fill="#3fb950">&gt; start-hermes</text>
+  <text x="55" y="408" class="box-desc">No PC connection needed!</text>
+  <text x="55" y="428" class="box-desc">Works on Wi-Fi or 4G/5G</text>
 
   <!-- Arrow -->
-  <line x1="230" y1="375" x2="260" y2="375" class="arrow-green" marker-end="url(#arrowhead-green)" />
+  <line x1="233" y1="379" x2="258" y2="379" class="arrow-green" marker-end="url(#arrowhead-green)" />
 
   <!-- Step 2 -->
-  <rect x="265" y="310" width="180" height="135" rx="6" fill="#21262d" stroke="#30363d" />
-  <text x="275" y="331" class="tag" fill="#58a6ff">2. AUTONOMOUS START</text>
-  <text x="275" y="353" class="box-desc">Bridge starts on phone</text>
-  <text x="275" y="373" class="box-desc">Port 8765 loopback</text>
-  <text x="275" y="393" class="box-desc">Hermes loads phone DB</text>
-  <text x="275" y="413" class="box-desc">Memory recalled instantly</text>
-  <text x="275" y="430" class="box-desc">Prompts user for question</text>
+  <rect x="266" y="308" width="180" height="142" rx="6" fill="#21262d" stroke="#30363d" />
+  <text x="276" y="328" class="tag" fill="#58a6ff">2. AUTONOMOUS START</text>
+  <text x="276" y="348" class="box-desc">Bridge starts on phone</text>
+  <text x="276" y="368" class="box-desc">Port 8765 loopback</text>
+  <text x="276" y="388" class="box-desc">Hermes loads phone DB</text>
+  <text x="276" y="408" class="box-desc">Memory recalled instantly</text>
+  <text x="276" y="428" class="box-desc">Prompts user for question</text>
 
   <!-- Arrow -->
-  <line x1="450" y1="375" x2="480" y2="375" class="arrow" marker-end="url(#arrowhead)" />
+  <line x1="454" y1="379" x2="479" y2="379" class="arrow" marker-end="url(#arrowhead)" />
 
   <!-- Step 3 -->
-  <rect x="485" y="310" width="180" height="135" rx="6" fill="#21262d" stroke="#30363d" />
-  <text x="495" y="331" class="tag" fill="#e3b341">3. DEEPMIND REASONING</text>
-  <text x="495" y="353" class="box-desc">Phone sends request</text>
-  <text x="495" y="373" class="box-desc">directly to Google Cloud</text>
-  <text x="495" y="393" class="box-desc">Gemini 3.8 Flash 1M</text>
-  <text x="495" y="413" class="box-desc">executes multi-step logic</text>
-  <text x="495" y="430" class="box-desc">Zero tokens truncated</text>
+  <rect x="487" y="308" width="180" height="142" rx="6" fill="#21262d" stroke="#30363d" />
+  <text x="497" y="328" class="tag" fill="#e3b341">3. DEEPMIND REASONING</text>
+  <text x="497" y="348" class="box-desc">Phone sends request</text>
+  <text x="497" y="368" class="box-desc">directly to Google Cloud</text>
+  <text x="497" y="388" class="box-desc">Gemini 3.8 Flash 1M</text>
+  <text x="497" y="408" class="box-desc">executes multi-step logic</text>
+  <text x="497" y="428" class="box-desc">Zero tokens truncated</text>
 
   <!-- Arrow -->
-  <line x1="670" y1="375" x2="700" y2="375" class="arrow-gold" marker-end="url(#arrowhead-gold)" />
+  <line x1="675" y1="379" x2="700" y2="379" class="arrow-gold" marker-end="url(#arrowhead-gold)" />
 
   <!-- Step 4 -->
-  <rect x="705" y="310" width="170" height="135" rx="6" fill="#21262d" stroke="#30363d" />
-  <text x="715" y="331" class="tag" fill="#3fb950">4. STREAMED TO SCREEN</text>
-  <text x="715" y="353" class="box-desc">Instant typewriter text</text>
-  <text x="715" y="373" class="box-desc">streams right on mobile!</text>
-  <text x="715" y="393" class="box-desc">Executes phone tools</text>
-  <text x="715" y="413" class="box-desc">Saves new memory in DB</text>
-  <text x="715" y="430" class="box-desc">Phone battery stays cool</text>
+  <rect x="708" y="308" width="172" height="142" rx="6" fill="#21262d" stroke="#30363d" />
+  <text x="718" y="328" class="tag" fill="#3fb950">4. STREAMED TO SCREEN</text>
+  <text x="718" y="348" class="box-desc">Instant typewriter text</text>
+  <text x="718" y="368" class="box-desc">streams right on mobile!</text>
+  <text x="718" y="388" class="box-desc">Executes phone tools</text>
+  <text x="718" y="408" class="box-desc">Saves new memory in DB</text>
+  <text x="718" y="428" class="box-desc">Phone battery stays cool</text>
 </svg>

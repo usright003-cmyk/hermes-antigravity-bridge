@@ -53,12 +53,12 @@
   <rect width="1060" height="590" class="bg" />
   
   <!-- Header Bar -->
-  <rect width="1060" height="44" class="header-bar" />
-  <circle cx="22" cy="22" r="6" class="dot-red" />
-  <circle cx="42" cy="22" r="6" class="dot-yellow" />
-  <circle cx="62" cy="22" r="6" class="dot-green" />
-  <text x="530" y="24" class="title">🧠 Memory Recall Lifecycle: Long-Term Context &amp; Local Persistence</text>
-  <text x="530" y="38" class="subtitle">1,000,000-Token Native Context &#8226; Local SQLite Sovereignty (memory.db) &#8226; Instant Model Switching</text>
+  <rect width="1060" height="48" class="header-bar" />
+  <circle cx="22" cy="24" r="6" class="dot-red" />
+  <circle cx="42" cy="24" r="6" class="dot-yellow" />
+  <circle cx="62" cy="24" r="6" class="dot-green" />
+  <text x="530" y="21" class="title">🧠 Memory Recall Lifecycle: Long-Term Context &amp; Local Persistence</text>
+  <text x="530" y="39" class="subtitle">1,000,000-Token Native Context &#8226; Local SQLite Sovereignty (memory.db) &#8226; Instant Model Switching</text>
 
   <!-- Lifelines:
        User: 80
@@ -67,11 +67,11 @@
        Bridge: 740
        Model: 970
   -->
-  <line x1="80" y1="102" x2="80" y2="485" class="lifeline" />
-  <line x1="320" y1="102" x2="320" y2="485" class="lifeline" />
-  <line x1="540" y1="102" x2="540" y2="485" class="lifeline" />
-  <line x1="740" y1="102" x2="740" y2="485" class="lifeline" />
-  <line x1="970" y1="102" x2="970" y2="485" class="lifeline" />
+  <line x1="80" y1="103" x2="80" y2="475" class="lifeline" />
+  <line x1="320" y1="103" x2="320" y2="475" class="lifeline" />
+  <line x1="540" y1="103" x2="540" y2="475" class="lifeline" />
+  <line x1="740" y1="103" x2="740" y2="475" class="lifeline" />
+  <line x1="970" y1="103" x2="970" y2="475" class="lifeline" />
 
   <!-- Top Actor Boxes -->
   <!-- User -->
@@ -98,7 +98,8 @@
   <circle cx="80" cy="135" r="9" fill="#1f6feb" />
   <text x="80" y="139" class="badge-text">1</text>
   <line x1="90" y1="135" x2="310" y2="135" class="arrow-blue" marker-end="url(#m-blue)" />
-  <text x="95" y="126" class="msg-quote">"Do you remember the database design we did last week?"</text>
+  <text x="95" y="117" class="msg-quote">"Do you remember the database</text>
+  <text x="95" y="130" class="msg-quote">design we did last week?"</text>
 
   <!-- Sequence Step 2: Hermes -> SQLite -->
   <circle cx="320" cy="180" r="9" fill="#238636" />
@@ -116,7 +117,8 @@
   <circle cx="320" cy="270" r="9" fill="#9e6a03" />
   <text x="320" y="274" class="badge-text">4</text>
   <line x1="330" y1="270" x2="730" y2="270" class="arrow-gold" marker-end="url(#m-gold)" />
-  <text x="345" y="262" class="msg-text"><tspan fill="#e3b341" font-weight="600">Send Prompt + 1M Context</tspan> + Recalled Memories</text>
+  <text x="345" y="252" class="msg-text"><tspan fill="#e3b341" font-weight="600">Send Prompt + 1M Context</tspan></text>
+  <text x="345" y="265" class="msg-text">+ Recalled Memories</text>
 
   <!-- Sequence Step 5: Bridge -> Model -->
   <circle cx="740" cy="315" r="9" fill="#9e6a03" />
@@ -140,7 +142,8 @@
   <circle cx="320" cy="450" r="9" fill="#1f6feb" />
   <text x="320" y="454" class="badge-text">8</text>
   <line x1="310" y1="450" x2="90" y2="450" class="arrow-blue" marker-end="url(#m-blue)" />
-  <text x="95" y="442" class="msg-quote">"Yes! Last week we designed the user schema..."</text>
+  <text x="95" y="432" class="msg-quote">"Yes! Last week we designed</text>
+  <text x="95" y="445" class="msg-quote">the user schema..."</text>
 
   <!-- Bottom Actor Boxes -->
   <rect x="30" y="475" width="100" height="34" class="actor-box box-user" />

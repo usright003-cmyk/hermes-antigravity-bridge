@@ -31,10 +31,12 @@
 * 🧠 **1,000,000-Token Native Context**: Massive 4,000,000-character prompt budget for large codebases, research papers, and deep conversational history without premature truncation.
 * ⚡ **Real-Time Token Streaming**: Subprocess `stream-json` bridge delivering low-latency Server-Sent Events (SSE) with instantaneous typewriter fluidity.
 * 🤖 **Multi-Model Catalog with Effort Control**: Native support and granular reasoning effort mapping (`low`, `medium`, `high`) for **Gemini 3.8/3.7/3.6 Flash**, **Gemini 3.1 Pro**, **Claude Sonnet 4.6 (Thinking)**, **Claude Opus 4.6 (Thinking)**, and **GPT-OSS 120B**.
-* 🛡️ **Hermes Cognitive Sovereignty**: Hermes is the sole, undisputed owner of `USER.md`, `MEMORY.md`, SQLite memory databases, and tool execution. Antigravity runs purely as an isolated, stateless reasoning engine.
-* 🔒 **Fail-Closed Sandbox Gate**: Antigravity is strictly prevented from executing autonomous host commands (`--sandbox`, `--mode plan`, `toolPermission: strict`, ephemeral isolated working directories).
-* 🔄 **Multi-Provider Coexistence**: Preserves existing providers (OpenAI, Anthropic, Groq, Ollama) in your Hermes configuration—switch anytime with `/model`!
-* 📦 **Zero External Dependencies**: Pure Python standard library (`http.server`, `subprocess`, `dataclasses`, `json`). Lightweight, auditable, and zero dependency drift.
+* 🔄 **Universal Multi-Persona Support**: Non-destructively preserves existing providers (OpenAI, Anthropic Claude, Groq, Ollama) as `fallback_providers`—switch anytime with `/model`! Existing `agy` users connect in 1 second; new users get complete zero-friction defaults.
+* 🔑 **Dual-Mode Flexible Authentication**: Auto-launches default browser for Google OAuth sign-in on desktop, with seamless headless terminal fallback (prints OAuth link & accepts verification code) for remote SSH, headless VPS, and Android Termux.
+* 🛠️ **Automatic Prerequisite Discovery**: 1-click installer automatically detects and installs Google Antigravity CLI (`agy`) via Google's official installer and installs/updates `hermes-agent` if missing.
+* 🪟 **Zero-Black-Window Silent Background Launcher**: Run the bridge in the background without terminal clutter or intrusive popup console windows via `Run-Antigravity-Bridge-Background.vbs`.
+* 📱 **Android & Termux Pocket Superintelligence**: 100% standalone PRoot Linux execution, pure-Python YAML fallback engine (zero dependency on C compilers), and `/ready` bearer-authenticated health monitoring.
+* 🛡️ **Hermes Cognitive Sovereignty & Fail-Closed Isolation**: Hermes is the sole, undisputed owner of `USER.md`, `MEMORY.md`, SQLite memory databases, and tool execution. Antigravity runs purely as an isolated, stateless reasoning engine (`--sandbox`, `--mode plan`, `toolPermission: strict`).
 * 📊 **Embedded Observability Dashboard**: Built-in glassmorphic web interface (`http://localhost:8765/dashboard`) and `/api/metrics` with zero external CDNs or frameworks.
 * 🌍 **Cross-Platform**: Verified and tested across Linux, macOS, Windows, and Android (Termux).
 
@@ -58,6 +60,19 @@ All models are dynamically available over `/v1/models` and compatible with Herme
 
 ---
 
+## 👥 Universal Multi-Persona Support
+
+The bridge is engineered to adapt automatically to any user environment without friction or data loss:
+
+| User Persona | Starting State | What the Bridge Does Automatically | Result |
+| :--- | :--- | :--- | :--- |
+| **Existing Antigravity User** | Already signed into `agy` on your PC/server | Automatically detects `jetski_state.pbtxt`, syncs credentials into isolated sandbox (`agy-home`), and configures Hermes. | **1-Second Instant Connect** |
+| **Existing Hermes Power User** | Configured with OpenAI, Claude, Groq, Ollama, etc. | Non-destructively backs up `config.yaml`, migrates active model to `fallback_providers`, preserves all `custom_providers`, and sets Antigravity as primary. | **Zero Overwrites** (Switch anytime with `/model`) |
+| **Clean-Slate / New User** | Neither `agy` nor `hermes` installed | Automatically downloads and installs Google Antigravity CLI via Google's official installer, installs `hermes-agent`, guides Google auth, and configures full defaults. | **100% Fully Automated Setup** |
+| **Headless / Mobile User** | Android Termux, Docker, VPS, or remote SSH | Auto-detects absence of a GUI browser, displays the official Google sign-in URL, prompts for verification code, and synchronizes auth state. | **Headless Terminal Link & Code Auth** |
+
+---
+
 ## 🚀 Quick Start Guide
 
 ### Option 1: One-Click Windows Automated Setup (Fastest)
@@ -68,11 +83,14 @@ Open PowerShell and run this single line:
 irm https://raw.githubusercontent.com/usright003-cmyk/hermes-antigravity-bridge/main/install.ps1 | iex
 ```
 
-This automatically:
-1. Clones the repository to your user directory.
-2. Checks/prompts for your Google Antigravity sign-in if needed.
-3. Automatically connects Antigravity to Hermes Agent while preserving your existing providers.
-4. Creates a convenient **`Run-Antigravity-Bridge.bat`** launcher directly on your **Desktop**.
+#### What happens automatically:
+1. **Prerequisite Discovery & Installation**: Auto-detects Python 3.10+. If Google Antigravity CLI (`agy`) is missing, installs it via Google's official install script (`irm https://antigravity.google/cli/install.ps1 | iex`). If `hermes` is missing, auto-installs `hermes-agent`.
+2. **Dual-Mode Guided Authentication**: If already signed in, connects in 1 second. If not yet authenticated, launches your browser or prints the Google OAuth link for terminal verification.
+3. **Non-Destructive Coexistence**: Connects Antigravity (`gemini-3.8-flash` 1M context) as Hermes's primary provider while cleanly preserving all your existing providers (OpenAI, Claude, Groq, Ollama) in `fallback_providers`.
+4. **Three Desktop Launchers Created**:
+   * 🔕 **`Run-Antigravity-Bridge-Background.vbs` (Silent Background Launcher)**: Starts the bridge process in the background with **zero black console window** or popup clutter. Perfect for daily coding sessions!
+   * 🖥️ **`Run-Antigravity-Bridge.bat` (Console Launcher)**: Standard launcher opening a console window with live token throughput and request logging.
+   * 🌐 **`Run-Antigravity-Bridge-LAN.bat` (Multi-Device / Mobile Mode)**: Binds to `0.0.0.0:8765` so your Android phone or local network devices can connect over Wi-Fi.
 
 ---
 
@@ -101,10 +119,15 @@ cd hermes-antigravity-bridge
 
 # 2. Automatic One-Click Connection to Hermes
 python connect_hermes.py
+# (Supports --sync-credentials [default: true] or --no-sync-credentials for air-gapped isolation)
 
-# 3. Start Bridge Server
-run-bridge.bat   # on Windows
-# or: python -m hermes_antigravity_bridge.cli serve
+# 3. Start Bridge Server:
+# Option A: Silent background launcher (no console window)
+#   Double click 'run-bridge-background.vbs'
+# Option B: Standard console launcher with live logs
+#   run-bridge.bat   (Windows) or python -m hermes_antigravity_bridge.cli serve
+# Option C: Network mode for mobile Termux over Wi-Fi
+#   run-bridge-lan.bat
 ```
 
 ---
@@ -134,18 +157,29 @@ pkg update -y && pkg install -y proot-distro git curl
 curl -sSL https://raw.githubusercontent.com/usright003-cmyk/hermes-antigravity-bridge/main/setup-termux.sh | bash -s -- --standalone
 ```
 
-#### What happens next:
-1. The script sets up an isolated PRoot Linux (Ubuntu ARM64) environment on your phone (no root needed).
-2. It installs Google's official Antigravity CLI (`agy`) and the Hermes Bridge.
-3. On first run, it presents a Google sign-in link. Simply tap/copy the link, sign in with your Google account in Chrome on your phone, and enter the authorization code.
-4. It creates a universal launcher: **`start-hermes`**.
+#### What happens next (Automated Step-by-Step Flow):
+1. **PRoot Ubuntu ARM64 Setup**: Provisions an isolated Linux userland inside Termux (no Android root required).
+2. **Automated Prerequisite Discovery**: Installs Python 3, `hermes-agent`, the bridge package, and Google's official ARM64 Antigravity CLI (`agy`).
+3. **Headless Link & Code Google Authentication**:
+   - Because Termux has no desktop GUI browser, `agy` prints an official Google OAuth URL in the terminal:
+     `https://accounts.google.com/o/oauth2/auth?...`
+   - Tap or copy the URL and open it in Google Chrome on your phone.
+   - Sign in with your Google account and approve Antigravity.
+   - Google displays a verification/authorization code on the web page.
+   - Switch back to Termux, paste the code into the prompt, and press Enter.
+   - Tokens are saved to `~/.gemini/antigravity-cli/jetski_state.pbtxt` and automatically synced to the isolated bridge profile.
+4. **Pure-Python YAML Config Engine**: Automatically updates `~/.hermes/config.yaml` using a built-in zero-dependency YAML engine (avoiding compilation errors on mobile ARM64) while safely preserving any existing providers in `fallback_providers`.
+5. **Universal Launcher & Background Health Monitor**:
+   - Creates the executable command **`start-hermes`**.
+   - Whenever `start-hermes` runs, it starts the bridge server in the background, checks credential freshness, and queries `http://127.0.0.1:8765/ready` with the bearer token until confirmed healthy before starting the Hermes interactive prompt.
+   - If startup encounters an error, it immediately dumps `/tmp/bridge.log` for instant visibility.
 
 #### Daily Usage on Mobile:
 Whenever you want to chat, simply open Termux and type:
 ```bash
 start-hermes
 ```
-*The bridge launches automatically in the background and Hermes opens right on your screen!*
+*The bridge launches automatically in the background, verifies its health status, and Hermes opens right on your screen!*
 
 ---
 
@@ -228,7 +262,7 @@ See [SECURITY.md](SECURITY.md) and [docs/security-and-privacy.md](docs/security-
 ## 🧪 Verification & Testing
 
 ```bash
-# Run full test suite (47/47 passing)
+# Run full test suite (73 passed, 2 skipped across 75 test cases)
 uv run --with pytest --with pytest-cov pytest
 
 # Verify bytecode compilation

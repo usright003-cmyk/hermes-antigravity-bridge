@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from typing import Any
 
 from .contracts import ChatCompletionResult, TextBackend
-from .errors import InvalidRequest
+from .errors import InvalidRequest, InvalidToolCall
 from .integrations.hermes import HermesPromptBuilder
 from .prompt.budget import PromptBudget
 from .tool_calls import parse_tool_calls
@@ -286,7 +286,7 @@ class ChatCompletionService:
                     except InvalidToolCall as exc:
                         _LOG.warning("tool call parse failed in stream: %s; degrading to text", exc)
                         raw = backend_response.response
-                        unstreamed = raw[len(streamed_text):] if raw.startswith(streamed_text) else raw
+                        unstreamed = raw.removeprefix(streamed_text)
                         if unstreamed:
                             yield {
                                 "type": "delta",
@@ -297,6 +297,10 @@ class ChatCompletionService:
                         yield {
                             "type": "finish",
                             "finish_reason": "stop",
+                            "x_bridge_error": {
+                                "type": "tool_call_parse_error",
+                                "message": str(exc),
+                            },
                             "usage": {
                                 "prompt_tokens": int(backend_response.usage.get("input_tokens", 0) or 0),
                                 "completion_tokens": int(backend_response.usage.get("output_tokens", 0) or 0),
@@ -329,11 +333,7 @@ class ChatCompletionService:
                         }
                     else:
                         if parsed.text:
-                            unstreamed = (
-                                parsed.text[len(streamed_text):]
-                                if parsed.text.startswith(streamed_text)
-                                else parsed.text
-                            )
+                            unstreamed = parsed.text.removeprefix(streamed_text)
                             if unstreamed:
                                 yield {
                                     "type": "delta",

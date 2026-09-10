@@ -701,6 +701,8 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                             }
                         ],
                     }
+                    if item.get("x_bridge_error"):
+                        chunk["x_bridge_error"] = item["x_bridge_error"]
                     if item.get("usage") and body.get("stream_options", {}).get("include_usage"):
                         chunk["usage"] = item["usage"]
                     self.wfile.write(b"data: " + _json_bytes(chunk) + b"\n\n")
@@ -718,6 +720,21 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         except BridgeError as exc:
             _LOG.warning("bridge error during active stream: %s", exc)
             try:
+                fallback_text = f"[Bridge Warning: Stream degraded - {_safe_client_message(exc)}]"
+                text_chunk = {
+                    "id": stream_id,
+                    "object": "chat.completion.chunk",
+                    "created": now,
+                    "model": "",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": fallback_text},
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+                self.wfile.write(b"data: " + _json_bytes(text_chunk) + b"\n\n")
                 err_chunk = {
                     "id": stream_id,
                     "object": "chat.completion.chunk",
@@ -734,15 +751,34 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                         "message": _safe_client_message(exc),
                         "type": exc.error_type,
                     },
+                    "x_bridge_error": {
+                        "type": exc.error_type,
+                        "message": _safe_client_message(exc),
+                    },
                 }
                 self.wfile.write(b"data: " + _json_bytes(err_chunk) + b"\n\n")
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
-            except Exception:
-                pass
+            except (OSError, RuntimeError) as write_err:
+                _LOG.debug("Could not flush SSE error event: %s", write_err)
         except Exception:  # noqa: BLE001
             _LOG.exception("unexpected error during active stream")
             try:
+                fallback_text = "[Bridge Error: Unexpected backend stream failure]"
+                text_chunk = {
+                    "id": stream_id,
+                    "object": "chat.completion.chunk",
+                    "created": now,
+                    "model": "",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": fallback_text},
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+                self.wfile.write(b"data: " + _json_bytes(text_chunk) + b"\n\n")
                 err_chunk = {
                     "id": stream_id,
                     "object": "chat.completion.chunk",
@@ -759,12 +795,16 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                         "message": "internal bridge stream error",
                         "type": "internal_error",
                     },
+                    "x_bridge_error": {
+                        "type": "internal_error",
+                        "message": "internal bridge stream error",
+                    },
                 }
                 self.wfile.write(b"data: " + _json_bytes(err_chunk) + b"\n\n")
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
-            except Exception:
-                pass
+            except (OSError, RuntimeError) as write_err:
+                _LOG.debug("Could not flush SSE error event: %s", write_err)
 
     def _completion_response(self, result: Any) -> dict[str, Any]:
         message: dict[str, Any] = {

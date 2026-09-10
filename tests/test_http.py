@@ -311,6 +311,11 @@ class HTTPContractTests(unittest.TestCase):
         status, _, updated_body = self.request("/api/metrics")
         self.assertEqual(status, 200)
         updated_data = json.loads(updated_body.decode("utf-8"))
+        self.assertEqual(
+            updated_data["metrics"]["total_requests"], initial_requests + 1
+        )
+        self.assertGreaterEqual(updated_data["metrics"]["uptime_seconds"], 0)
+
     def test_streaming_error_cleanly_terminates_sse_stream_without_abrupt_disconnect(self):
         class BrokenStreamBackend(FakeBackend):
             def generate_stream(self, prompt, model, **kwargs):

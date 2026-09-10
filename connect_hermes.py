@@ -45,7 +45,7 @@ def find_hermes_config_path() -> Path | None:
     return candidates[0] if candidates else None
 
 
-def setup_agy_isolation_home() -> Path:
+def setup_agy_isolation_home(sync_credentials: bool = False) -> Path:
     agy_home = Path.home() / ".local" / "state" / "hermes-antigravity-bridge" / "agy-home"
     cli_dir = agy_home / ".gemini" / "antigravity-cli"
     cli_dir.mkdir(parents=True, exist_ok=True)
@@ -59,18 +59,24 @@ def setup_agy_isolation_home() -> Path:
         "trustedWorkspaces": []
     }, indent=2), encoding="utf-8")
 
-    # Inherit existing CLI authentication & onboarding state from user profile
-    user_cli = Path.home() / ".gemini" / "antigravity-cli"
-    if user_cli.exists():
-        for filename in ("installation_id", "jetski_state.pbtxt"):
-            src = user_cli / filename
-            if src.exists():
-                shutil.copy2(src, cli_dir / filename)
+    # Inherit existing CLI authentication only if explicitly opted-in
+    if sync_credentials:
+        user_cli = Path.home() / ".gemini" / "antigravity-cli"
+        if user_cli.exists():
+            for filename in ("installation_id", "jetski_state.pbtxt"):
+                src = user_cli / filename
+                if src.exists():
+                    shutil.copy2(src, cli_dir / filename)
+                    if os.name == "posix":
+                        try:
+                            os.chmod(cli_dir / filename, 0o600)
+                        except OSError:
+                            pass
 
     return agy_home
 
 
-def setup_bridge() -> tuple[Path, str]:
+def setup_bridge(sync_credentials: bool = False) -> tuple[Path, str]:
     config_dir = Path.home() / ".config" / "hermes-antigravity-bridge"
     config_dir.mkdir(parents=True, exist_ok=True)
 
@@ -81,9 +87,10 @@ def setup_bridge() -> tuple[Path, str]:
         token = secrets.token_urlsafe(32)
         token_file.write_text(token, encoding="utf-8")
 
-    setup_agy_isolation_home()
+    setup_agy_isolation_home(sync_credentials=sync_credentials)
 
     config_file = config_dir / "config.toml"
+    sync_str = "true" if sync_credentials else "false"
     toml_content = f"""[server]
 host = "127.0.0.1"
 port = 8765
@@ -101,7 +108,7 @@ mode = "plan"
 enforce_tool_isolation = true
 validated_versions = ["1.1.17", "1.1.28", "1.2.0", "1.2.1", "1.2.2"]
 allow_unvalidated_versions = false
-sync_user_credentials = true
+sync_user_credentials = {sync_str}
 tool_call_mode = "compatible"
 
 [prompt]
@@ -159,10 +166,10 @@ def update_hermes_config(hermes_config_path: Path, token: str) -> None:
     cfg["model"]["provider"] = "custom:antigravity"
     cfg["model"]["base_url"] = "http://127.0.0.1:8765/v1"
 
+    # Strict token security: reference key_env only, no inline plaintext api_key in config.yaml
     custom_entry = {
         "name": "antigravity",
         "base_url": "http://127.0.0.1:8765/v1",
-        "api_key": token,
         "key_env": "HERMES_ANTIGRAVITY_BRIDGE_TOKEN",
         "api_mode": "chat_completions",
     }
@@ -261,6 +268,16 @@ def ensure_antigravity_auth(agy_bin: str) -> None:
 
 
 def main() -> int:
+    import argparse
+    parser = argparse.ArgumentParser(description="Hermes Agent Antigravity Connector")
+    parser.add_argument(
+        "--sync-credentials",
+        action="store_true",
+        default=False,
+        help="Explicitly synchronize Google authentication tokens into the isolated profile",
+    )
+    args = parser.parse_args()
+
     repo_root = Path(__file__).resolve().parent
     print("=" * 65)
     print("[*] Hermes-Antigravity Bridge — One-Click Auto Setup...")
@@ -279,8 +296,12 @@ def main() -> int:
 
     ensure_antigravity_auth(agy_bin)
 
-    config_file, token = setup_bridge()
+    config_file, token = setup_bridge(sync_credentials=args.sync_credentials)
     print(f"[+] Bridge config created: {config_file}")
+    if args.sync_credentials:
+        print("[+] User Google credentials synchronized into isolated profile (--sync-credentials enabled)")
+    else:
+        print("[+] Preserved strict profile isolation (credentials NOT synchronized)")
     print("[+] Bridge secret token generated automatically")
     print("[+] Isolated Antigravity sandbox environment configured")
 

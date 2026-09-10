@@ -183,6 +183,34 @@ start-hermes
 
 ---
 
+### 💬 In-Chat Mobile Setup: What Happens When You Give Hermes This Repo Link?
+
+If you already have Hermes Agent running on your mobile device (e.g. in Termux, Telegram, Discord, or web interface) and you send Hermes the GitHub repository link:
+> *"Hey Hermes, connect this repository for me: https://github.com/usright003-cmyk/hermes-antigravity-bridge"*
+
+Here is the exact step-by-step execution flow:
+
+1. **Autonomous Tool Execution**:
+   Hermes executes terminal commands inside Termux to clone the bridge repository and runs `python connect_hermes.py` (or `setup-termux.sh`).
+2. **Interactive OAuth Link Relay**:
+   Since Android Termux has no desktop window manager to pop open a graphical browser, Google's Antigravity CLI operates in headless mode and outputs the official Google OAuth URL:
+   ```text
+   https://accounts.google.com/o/oauth2/auth?client_id=...
+   ```
+   Hermes captures this process stdout and **sends the link directly to you in your chat!**
+3. **One-Tap Browser Sign-In**:
+   You tap or copy the link sent by Hermes, open it in your mobile **Google Chrome** (or default browser), sign into your Google account, and tap **Allow / Authorize**.
+4. **Google Verification Code Display**:
+   Google displays an official **Verification / Authorization Code** (e.g. `4/0AY0e-...`) on screen with a convenient **Copy** button.
+5. **Paste the Code to Hermes**:
+   You copy the code from Chrome, switch back to your chat with Hermes, and paste the code.
+6. **Token Sync & Non-Destructive Activation**:
+   Hermes pipes the code into the waiting CLI process stdin. Antigravity exchanges the code with Google for valid OAuth tokens and saves them to `~/.gemini/antigravity-cli/jetski_state.pbtxt`. The bridge script immediately syncs these tokens to `agy-home`, archives your previous providers (OpenAI, Groq, Claude) in `fallback_providers`, and sets `gemini-3.8-flash` as Hermes's primary model.
+7. **Instant Superintelligence**:
+   The bridge background daemon spins up, confirms `/ready` health status, and Hermes confirms that it is now running on Google DeepMind's 1,000,000-token Antigravity engine with zero cloud fees!
+
+---
+
 ### 🌐 Setup Mode 2: Remote Bridge (Connect to PC / VPS)
 
 If you prefer to keep the bridge running on your home PC or cloud VPS and use Termux as a lightweight client:
@@ -266,7 +294,7 @@ See [SECURITY.md](SECURITY.md) and [docs/security-and-privacy.md](docs/security-
 uv run --with pytest --with pytest-cov pytest
 
 # Verify bytecode compilation
-python -m compileall -q src tests
+python -m compileall -q src tests connect_hermes.py
 ```
 
 ---

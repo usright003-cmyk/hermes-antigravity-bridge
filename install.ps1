@@ -94,24 +94,10 @@ if ($HermesCmd) {
 Write-Host "[*] Running bridge connector..." -ForegroundColor Yellow
 & $PythonExe connect_hermes.py --sync-credentials
 
-# 7. Create Desktop Shortcuts & Launchers with absolute paths to avoid ModuleNotFoundError
-$Desktop = [Environment]::GetFolderPath("Desktop")
-if (-not (Test-Path $Desktop) -and (Test-Path "$HOME\Desktop")) {
-    $Desktop = "$HOME\Desktop"
-}
-if (-not (Test-Path $Desktop) -and $env:OneDrive -and (Test-Path "$env:OneDrive\Desktop")) {
-    $Desktop = "$env:OneDrive\Desktop"
-}
+# 7. Setup repository-local launchers
+Write-Host "[*] Setting up repository launchers in $InstallDir..." -ForegroundColor Yellow
 
-if (Test-Path $Desktop) {
-    $DesktopBat = "$Desktop\Run-Antigravity-Bridge.bat"
-    $DesktopLanBat = "$Desktop\Run-Antigravity-Bridge-LAN.bat"
-    $DesktopSilentVbs = "$Desktop\Run-Antigravity-Bridge-Background.vbs"
-    $DesktopLaunchHermes = "$Desktop\Launch-Hermes.bat"
-    $DesktopStopBat = "$Desktop\Stop-Antigravity-Bridge.bat"
-
-    # Standard Console Launcher
-    $batContent = @"
+$batContent = @"
 @echo off
 title Hermes-Antigravity Bridge (Port 8765)
 echo ====================================================================
@@ -125,10 +111,9 @@ set PYTHONPATH=$InstallDir\src;%PYTHONPATH%
 "$PythonExe" -m hermes_antigravity_bridge.cli --config "%USERPROFILE%\.config\hermes-antigravity-bridge\config.toml" serve
 pause
 "@
-    Set-Content -Path $DesktopBat -Value $batContent -Encoding ASCII
+Set-Content -Path "$InstallDir\run-bridge.bat" -Value $batContent -Encoding ASCII
 
-    # LAN Launcher
-    $lanBatContent = @"
+$lanBatContent = @"
 @echo off
 title Hermes-Antigravity Bridge (LAN / Mobile Mode - Port 8765)
 echo ====================================================================
@@ -144,10 +129,9 @@ set AGY_BRIDGE_ALLOW_REMOTE=true
 "$PythonExe" -m hermes_antigravity_bridge.cli --config "%USERPROFILE%\.config\hermes-antigravity-bridge\config.toml" serve
 pause
 "@
-    Set-Content -Path $DesktopLanBat -Value $lanBatContent -Encoding ASCII
+Set-Content -Path "$InstallDir\run-bridge-lan.bat" -Value $lanBatContent -Encoding ASCII
 
-    # Silent / Windowless Background Launcher (.vbs)
-    $vbsContent = @"
+$vbsContent = @"
 Set WshShell = CreateObject("WScript.Shell")
 WshShell.CurrentDirectory = "$InstallDir"
 Set WshProcessEnv = WshShell.Environment("Process")
@@ -157,25 +141,23 @@ ConfigFile = UserProfile & "\.config\hermes-antigravity-bridge\config.toml"
 PythonCmd = Chr(34) & "$PythonExe" & Chr(34) & " -m hermes_antigravity_bridge.cli --config " & Chr(34) & ConfigFile & Chr(34) & " serve"
 WshShell.Run PythonCmd, 0, False
 "@
-    Set-Content -Path $DesktopSilentVbs -Value $vbsContent -Encoding ASCII
+Set-Content -Path "$InstallDir\run-bridge-background.vbs" -Value $vbsContent -Encoding ASCII
 
-    # Smart 1-Click Hermes Launcher (auto-starts bridge if needed)
-    $launchHermesContent = @"
+$launchHermesContent = @"
 @echo off
 title Hermes AI Assistant
 curl -s -m 1 http://127.0.0.1:8765/health >nul 2>&1
 if %ERRORLEVEL% NEQ 0 (
     echo [*] Starting Hermes-Antigravity Bridge in background...
-    start "" wscript "%USERPROFILE%\Desktop\Run-Antigravity-Bridge-Background.vbs"
+    start "" wscript "%~dp0run-bridge-background.vbs"
     timeout /t 3 /nobreak >nul
 )
 echo Launching Hermes...
 hermes %*
 "@
-    Set-Content -Path $DesktopLaunchHermes -Value $launchHermesContent -Encoding ASCII
+Set-Content -Path "$InstallDir\launch-hermes.bat" -Value $launchHermesContent -Encoding ASCII
 
-    # Clean Teardown Script for Background Bridge
-    $stopBatContent = @"
+$stopBatContent = @"
 @echo off
 title Stop Hermes-Antigravity Bridge
 echo Stopping Hermes-Antigravity Bridge daemon...
@@ -185,66 +167,13 @@ for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8765" ^| findstr "LISTENING
 echo Bridge daemon stopped.
 timeout /t 2 /nobreak >nul
 "@
-    Set-Content -Path $DesktopStopBat -Value $stopBatContent -Encoding ASCII
-
-    Write-Host "[+] Desktop launcher created: $DesktopBat" -ForegroundColor Green
-    Write-Host "[+] Desktop LAN launcher created: $DesktopLanBat" -ForegroundColor Green
-    Write-Host "[+] Desktop background/silent launcher created: $DesktopSilentVbs" -ForegroundColor Green
-    Write-Host "[+] Desktop Smart Hermes launcher created: $DesktopLaunchHermes" -ForegroundColor Green
-    Write-Host "[+] Desktop Stop Bridge launcher created: $DesktopStopBat" -ForegroundColor Green
-}
-
-# Also ensure repository root has all launchers and sync to user profile
-Copy-Item "$InstallDir\run-bridge.bat" "$HOME\run-bridge.bat" -Force -ErrorAction SilentlyContinue
-Copy-Item "$InstallDir\run-bridge-lan.bat" "$HOME\run-bridge-lan.bat" -Force -ErrorAction SilentlyContinue
-if (Test-Path "$InstallDir\run-bridge-background.vbs") {
-    Copy-Item "$InstallDir\run-bridge-background.vbs" "$HOME\run-bridge-background.vbs" -Force -ErrorAction SilentlyContinue
-}
-if ($DesktopLaunchHermes -and (Test-Path $DesktopLaunchHermes)) {
-    Copy-Item $DesktopLaunchHermes "$HOME\Launch-Hermes.bat" -Force -ErrorAction SilentlyContinue
-}
-if ($DesktopStopBat -and (Test-Path $DesktopStopBat)) {
-    Copy-Item $DesktopStopBat "$HOME\Stop-Antigravity-Bridge.bat" -Force -ErrorAction SilentlyContinue
-}
-
-# 6. Auto-start background bridge daemon immediately
-Write-Host "[*] Ensuring Hermes-Antigravity Bridge background daemon is active..." -ForegroundColor Cyan
-$bridgeListening = $false
-try {
-    $res = Invoke-RestMethod -Uri "http://127.0.0.1:8765/health" -TimeoutSec 1 -ErrorAction SilentlyContinue
-    if ($res.status -eq "ok") { $bridgeListening = $true }
-} catch {}
-
-if (-not $bridgeListening -and $DesktopSilentVbs -and (Test-Path $DesktopSilentVbs)) {
-    Start-Process -FilePath "wscript.exe" -ArgumentList "`"$DesktopSilentVbs`""
-    $retries = 10
-    while ($retries -gt 0 -and -not $bridgeListening) {
-        Start-Sleep -Seconds 1
-        try {
-            $res = Invoke-RestMethod -Uri "http://127.0.0.1:8765/health" -TimeoutSec 2 -ErrorAction Stop
-            if ($res.status -eq "ok") { $bridgeListening = $true }
-        } catch {}
-        $retries--
-    }
-}
-
-if ($bridgeListening) {
-    Write-Host "[+] Bridge daemon is ACTIVE and listening on http://127.0.0.1:8765" -ForegroundColor Green
-} else {
-    Write-Host "[*] Bridge daemon starting in background. Use 'Launch-Hermes.bat' to start chatting." -ForegroundColor Yellow
-}
-
-# 7. Register persistent auto-start on Windows login (Startup folder)
-$StartupDir = [Environment]::GetFolderPath("Startup")
-if ($DesktopSilentVbs -and (Test-Path $StartupDir) -and (Test-Path $DesktopSilentVbs)) {
-    Copy-Item -Path $DesktopSilentVbs -Destination "$StartupDir\hermes-antigravity-bridge.vbs" -Force -ErrorAction SilentlyContinue
-    Write-Host "[+] Configured auto-start on Windows boot: $StartupDir\hermes-antigravity-bridge.vbs" -ForegroundColor Green
-}
+Set-Content -Path "$InstallDir\stop-bridge.bat" -Value $stopBatContent -Encoding ASCII
 
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host " Setup Complete! Hermes is now connected and ready to chat." -ForegroundColor Green
-Write-Host " -> Bridge daemon is running in the background (Port 8765)." -ForegroundColor White
-Write-Host " -> Type 'hermes' in any terminal to start chatting immediately!" -ForegroundColor White
-Write-Host " -> Or double-click 'Launch-Hermes.bat' on your Desktop." -ForegroundColor White
-Write-Host " -> Automatically starts whenever Windows boots." -ForegroundColor White
+Write-Host " Setup Complete! Hermes is now connected and ready." -ForegroundColor Green
+Write-Host " -> Launchers are kept self-contained in: $InstallDir" -ForegroundColor White
+Write-Host " -> To run bridge in console: $InstallDir\run-bridge.bat" -ForegroundColor White
+Write-Host " -> To run bridge in background: $InstallDir\run-bridge-background.vbs" -ForegroundColor White
+Write-Host " -> To launch Hermes with auto-bridge check: $InstallDir\launch-hermes.bat" -ForegroundColor White
+Write-Host " -> To stop background bridge: $InstallDir\stop-bridge.bat" -ForegroundColor White
 Write-Host "==========================================================" -ForegroundColor Cyan

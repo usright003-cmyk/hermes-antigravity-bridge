@@ -548,9 +548,14 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             except BridgeError as exc:
                 self._error(exc.status_code, _safe_client_message(exc), exc.error_type)
             return
-        if path == "/v1/models":
-            if not self._require_auth():
-                return
+        if path in {"/v1/models", "/models"}:
+            if not self._authorized(allow_query_token=True):
+                # Allow unauthenticated model discovery on loopback for /models fallback
+                if path == "/models" and _is_loopback_ip(client_ip):
+                    pass
+                else:
+                    if not self._require_auth(allow_query_token=True):
+                        return
             try:
                 models = self.bridge_server.chat_service.list_models()
                 now = int(time.time())
@@ -564,6 +569,13 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                                 "object": "model",
                                 "created": now,
                                 "owned_by": "antigravity",
+                            }
+                            for model in models
+                        ],
+                        "models": [
+                            {
+                                "name": model,
+                                "model": model,
                             }
                             for model in models
                         ],
@@ -589,10 +601,15 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                 return
             self._send(200, {"version": __version__})
             return
-        if path.startswith("/v1/models/"):
-            if not self._require_auth():
-                return
-            model = unquote(path[len("/v1/models/") :]).strip()
+        if path.startswith(("/v1/models/", "/models/")):
+            prefix = "/v1/models/" if path.startswith("/v1/models/") else "/models/"
+            if not self._authorized(allow_query_token=True):
+                if prefix == "/models/" and _is_loopback_ip(client_ip):
+                    pass
+                else:
+                    if not self._require_auth(allow_query_token=True):
+                        return
+            model = unquote(path[len(prefix) :]).strip()
             try:
                 models = self.bridge_server.chat_service.list_models()
             except BridgeError as exc:

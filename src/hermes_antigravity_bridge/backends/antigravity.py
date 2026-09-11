@@ -92,26 +92,25 @@ def parse_model_ids(output: str) -> tuple[str, ...]:
 
 DEFAULT_ANTIGRAVITY_MODELS: tuple[str, ...] = (
     "gemini-3.8-flash",
-    "gemini-3.8-flash-low",
-    "gemini-3.8-flash-medium",
     "gemini-3.8-flash-high",
+    "gemini-3.8-flash-medium",
+    "gemini-3.8-flash-low",
     "gemini-3.7-flash",
-    "gemini-3.7-flash-low",
-    "gemini-3.7-flash-medium",
     "gemini-3.7-flash-high",
+    "gemini-3.7-flash-medium",
+    "gemini-3.7-flash-low",
     "gemini-3.6-flash",
-    "gemini-3.6-flash-low",
-    "gemini-3.6-flash-medium",
     "gemini-3.6-flash-high",
+    "gemini-3.6-flash-medium",
+    "gemini-3.6-flash-low",
     "gemini-3.1-pro",
-    "gemini-3.1-pro-low",
-    "gemini-3.1-pro-medium",
     "gemini-3.1-pro-high",
+    "gemini-3.1-pro-low",
     "claude-sonnet-4-6",
-    "claude-sonnet-4.6",
     "claude-opus-4-6",
-    "claude-opus-4.6",
+    "claude-opus-4-6-thinking",
     "gpt-oss-120b",
+    "gpt-oss-120b-medium",
 )
 
 
@@ -292,23 +291,29 @@ class AntigravityBackend:
 
         selected_effort: str | None = effort
         base_model = model
-        for suffix in ("-high", "-medium", "-low"):
-            if base_model.endswith(suffix):
-                selected_effort = suffix[1:]
-                base_model = base_model[: -len(suffix)]
-                break
 
-        if selected_effort is not None:
-            selected_effort = selected_effort.lower().strip()
-            if selected_effort in ("minimal", "none"):
-                selected_effort = "low"
-            elif selected_effort in ("xhigh", "max", "ultra"):
-                selected_effort = "high"
-            elif selected_effort not in ("low", "medium", "high"):
+        # agy CLI specifically expects 'claude-opus-4-6-thinking' for Opus
+        if base_model in ("claude-opus-4-6", "claude-opus-4.6"):
+            base_model = "claude-opus-4-6-thinking"
+
+        if "gemini" in base_model.lower():
+            for suffix in ("-high", "-medium", "-low"):
+                if base_model.endswith(suffix):
+                    selected_effort = suffix[1:]
+                    base_model = base_model[: -len(suffix)]
+                    break
+
+            if selected_effort is not None:
+                selected_effort = selected_effort.lower().strip()
+                if selected_effort in ("minimal", "none"):
+                    selected_effort = "low"
+                elif selected_effort in ("xhigh", "max", "ultra"):
+                    selected_effort = "high"
+                elif selected_effort not in ("low", "medium", "high"):
+                    selected_effort = "medium"
+
+            if selected_effort is None:
                 selected_effort = "medium"
-
-        if selected_effort is None and "gemini" in base_model.lower():
-            selected_effort = "medium"
 
         command.extend(
             [
@@ -346,6 +351,13 @@ class AntigravityBackend:
                 models = ()
             if models:
                 self._model_source = "discovered"
+                # If discovered models come from standard Antigravity CLI, ensure canonical models are present
+                if any("gemini-3.8-flash" in m for m in models) or any("claude" in m for m in models):
+                    merged: list[str] = list(DEFAULT_ANTIGRAVITY_MODELS)
+                    for m in models:
+                        if m not in merged:
+                            merged.append(m)
+                    models = tuple(merged)
             else:
                 models = DEFAULT_ANTIGRAVITY_MODELS
                 self._model_source = "fallback"
@@ -379,6 +391,7 @@ class AntigravityBackend:
             "claude sonnet 4.6": "claude-sonnet-4-6",
             "claude-opus-4-6": "claude-opus-4-6",
             "claude-opus-4.6": "claude-opus-4-6",
+            "claude-opus-4-6-thinking": "claude-opus-4-6-thinking",
             "claude opus 4.6 (thinking)": "claude-opus-4-6",
             "claude opus 4.6": "claude-opus-4-6",
             "claude-sonnet": "claude-sonnet-4-6",
@@ -389,6 +402,7 @@ class AntigravityBackend:
             "claude-3-opus": "claude-opus-4-6",
             # OpenAI / GPT-OSS family aliases
             "gpt-oss-120b": "gpt-oss-120b",
+            "gpt-oss-120b-medium": "gpt-oss-120b-medium",
             "gpt-oss-120b (medium)": "gpt-oss-120b",
             "gpt-oss 120b (medium)": "gpt-oss-120b",
             "gpt-oss 120b": "gpt-oss-120b",

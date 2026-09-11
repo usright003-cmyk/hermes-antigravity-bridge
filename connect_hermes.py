@@ -27,6 +27,30 @@ except ImportError:
     yaml = None
 
 
+SUPPORTED_ANTIGRAVITY_MODELS: tuple[str, ...] = (
+    "gemini-3.8-flash",
+    "gemini-3.8-flash-high",
+    "gemini-3.8-flash-medium",
+    "gemini-3.8-flash-low",
+    "gemini-3.7-flash",
+    "gemini-3.7-flash-high",
+    "gemini-3.7-flash-medium",
+    "gemini-3.7-flash-low",
+    "gemini-3.6-flash",
+    "gemini-3.6-flash-high",
+    "gemini-3.6-flash-medium",
+    "gemini-3.6-flash-low",
+    "gemini-3.1-pro",
+    "gemini-3.1-pro-high",
+    "gemini-3.1-pro-low",
+    "claude-sonnet-4-6",
+    "claude-opus-4-6",
+    "claude-opus-4-6-thinking",
+    "gpt-oss-120b",
+    "gpt-oss-120b-medium",
+)
+
+
 def _dump_scalar_fallback(val: Any) -> str:
     if val is None:
         return "null"
@@ -135,6 +159,22 @@ def dump_yaml_fallback(data: Any, indent: int = 0) -> str:
                             lines.append(f"{prefix}  - {_dump_scalar_fallback(item)}")
             else:
                 lines.append(f"{prefix}{key}: {_dump_scalar_fallback(val)}")
+    elif isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict):
+                sub = dump_yaml_fallback(item, indent)
+                if sub:
+                    lines.append(sub)
+            elif isinstance(item, list):
+                if not item:
+                    lines.append(f"{prefix}- []")
+                else:
+                    lines.append(f"{prefix}-")
+                    sub = dump_yaml_fallback(item, indent + 1)
+                    if sub:
+                        lines.append(sub)
+            else:
+                lines.append(f"{prefix}- {_dump_scalar_fallback(item)}")
     return "\n".join(lines)
 
 
@@ -240,6 +280,22 @@ def parse_yaml_fallback(text: str) -> dict[str, Any]:
                 is_list = True
             break
 
+        def _parse_child(parent_indent: int) -> Any:
+            child_indent = parent_indent + 2
+            peek_is_list = False
+            lookahead = idx
+            while lookahead < total:
+                peek = lines[lookahead]
+                p_strip = peek.strip()
+                if p_strip and not p_strip.startswith("#"):
+                    child_indent = len(peek) - len(peek.lstrip(" "))
+                    peek_is_list = p_strip.startswith("- ")
+                    break
+                lookahead += 1
+            if child_indent > parent_indent or (child_indent == parent_indent and peek_is_list):
+                return parse_block(child_indent, expect_list=peek_is_list)
+            return None
+
         if is_list:
             result_list: list[Any] = []
             while idx < total:
@@ -266,7 +322,7 @@ def parse_yaml_fallback(text: str) -> dict[str, Any]:
                     if v is not None:
                         item_dict[k] = _parse_scalar_fallback(v)
                     else:
-                        item_dict[k] = parse_block(line_indent + 4)
+                        item_dict[k] = _parse_child(line_indent)
 
                     while idx < total:
                         n_raw = lines[idx]
@@ -277,8 +333,6 @@ def parse_yaml_fallback(text: str) -> dict[str, Any]:
                         n_indent = len(n_raw) - len(n_raw.lstrip(" "))
                         if n_indent <= line_indent:
                             break
-                        if n_stripped.startswith("- "):
-                            break
                         n_split = _split_mapping_line(n_stripped)
                         if n_split is not None:
                             sub_k, sub_v = n_split
@@ -286,7 +340,7 @@ def parse_yaml_fallback(text: str) -> dict[str, Any]:
                             if sub_v is not None:
                                 item_dict[sub_k] = _parse_scalar_fallback(sub_v)
                             else:
-                                item_dict[sub_k] = parse_block(n_indent + 2)
+                                item_dict[sub_k] = _parse_child(n_indent)
                         else:
                             idx += 1
                     result_list.append(item_dict)
@@ -313,21 +367,7 @@ def parse_yaml_fallback(text: str) -> dict[str, Any]:
             if v is not None:
                 result_dict[k] = _parse_scalar_fallback(v)
             else:
-                child_indent = line_indent + 2
-                peek_is_list = False
-                lookahead = idx
-                while lookahead < total:
-                    peek = lines[lookahead]
-                    p_strip = peek.strip()
-                    if p_strip and not p_strip.startswith("#"):
-                        child_indent = len(peek) - len(peek.lstrip(" "))
-                        peek_is_list = p_strip.startswith("- ")
-                        break
-                    lookahead += 1
-                if child_indent > line_indent or (child_indent == line_indent and peek_is_list):
-                    result_dict[k] = parse_block(child_indent, expect_list=peek_is_list)
-                else:
-                    result_dict[k] = None
+                result_dict[k] = _parse_child(line_indent)
         return result_dict
 
     parsed = parse_block(0)
@@ -540,8 +580,11 @@ def update_hermes_config(hermes_config_path: Path, token: str) -> list[str]:
     custom_entry = {
         "name": "antigravity",
         "base_url": "http://127.0.0.1:8765/v1",
+        "api_key": token,
         "key_env": "HERMES_ANTIGRAVITY_BRIDGE_TOKEN",
         "api_mode": "chat_completions",
+        "model": "gemini-3.8-flash",
+        "models": list(SUPPORTED_ANTIGRAVITY_MODELS),
     }
 
     raw_custom = cfg.get("custom_providers")
@@ -606,7 +649,7 @@ def create_launcher_batch(repo_root: Path) -> Path:
 title Hermes-Antigravity Bridge (Port 8765)
 echo ====================================================================
 echo   HERMES - ANTIGRAVITY BRIDGE
-echo   1,000,000 Token Native Context ^| Gemini 3.8 Flash (High)
+echo   1,000,000 Token Native Context | Gemini 3.8 Flash (High)
 echo   Listening at: http://127.0.0.1:8765
 echo ====================================================================
 echo.
@@ -626,7 +669,7 @@ def create_lan_launcher_batch(repo_root: Path) -> Path:
 title Hermes-Antigravity Bridge (LAN / Mobile Mode - Port 8765)
 echo ====================================================================
 echo   HERMES - ANTIGRAVITY BRIDGE (LAN & MOBILE TERMUX MODE)
-echo   1,000,000 Token Native Context ^| Multi-Device Network Mode
+echo   1,000,000 Token Native Context | Multi-Device Network Mode
 echo   Listening at: http://0.0.0.0:8765
 echo ====================================================================
 echo.
@@ -665,11 +708,7 @@ title Hermes AI Assistant
 curl -s -m 1 http://127.0.0.1:8765/health >nul 2>&1
 if %ERRORLEVEL% NEQ 0 (
     echo [*] Starting Hermes-Antigravity Bridge in background...
-    if exist "%USERPROFILE%\\Desktop\\Run-Antigravity-Bridge-Background.vbs" (
-        start "" wscript "%USERPROFILE%\\Desktop\\Run-Antigravity-Bridge-Background.vbs"
-    ) else (
-        start "" wscript "%~dp0run-bridge-background.vbs"
-    )
+    start "" wscript "%~dp0run-bridge-background.vbs"
     timeout /t 3 /nobreak >nul
 )
 echo Launching Hermes...
@@ -695,88 +734,17 @@ timeout /t 2 /nobreak >nul
 
 
 def create_desktop_launchers(repo_root: Path) -> list[Path]:
+    """Create local launcher scripts inside the repository directory.
+
+    Desktop shortcut creation has been removed to keep the repository self-contained
+    and avoid modifying the user's laptop desktop.
+    """
     create_launcher_batch(repo_root)
     create_lan_launcher_batch(repo_root)
     create_background_launcher_vbs(repo_root)
     create_launch_hermes_batch(repo_root)
     create_stop_bridge_batch(repo_root)
-
-    desktop_dir = get_desktop_dir()
-    if not desktop_dir.exists():
-        return []
-
-    created: list[Path] = []
-    python_exe = sys.executable
-
-    desktop_files = {
-        "Run-Antigravity-Bridge.bat": f"""@echo off
-title Hermes-Antigravity Bridge (Port 8765)
-echo ====================================================================
-echo   HERMES - ANTIGRAVITY BRIDGE
-echo   1,000,000 Token Native Context ^| Gemini 3.8 Flash (High)
-echo   Listening at: http://127.0.0.1:8765
-echo ====================================================================
-echo.
-cd /d "{repo_root}"
-set PYTHONPATH={repo_root}\\src;%PYTHONPATH%
-"{python_exe}" -m hermes_antigravity_bridge.cli --config "%USERPROFILE%\\.config\\hermes-antigravity-bridge\\config.toml" serve
-pause
-""",
-        "Run-Antigravity-Bridge-LAN.bat": f"""@echo off
-title Hermes-Antigravity Bridge (LAN / Mobile Mode - Port 8765)
-echo ====================================================================
-echo   HERMES - ANTIGRAVITY BRIDGE (LAN & MOBILE TERMUX MODE)
-echo   1,000,000 Token Native Context ^| Multi-Device Network Mode
-echo   Listening at: http://0.0.0.0:8765
-echo ====================================================================
-echo.
-cd /d "{repo_root}"
-set PYTHONPATH={repo_root}\\src;%PYTHONPATH%
-set AGY_BRIDGE_HOST=0.0.0.0
-set AGY_BRIDGE_ALLOW_REMOTE=true
-"{python_exe}" -m hermes_antigravity_bridge.cli --config "%USERPROFILE%\\.config\\hermes-antigravity-bridge\\config.toml" serve
-pause
-""",
-        "Run-Antigravity-Bridge-Background.vbs": f"""' Silent background launcher for Hermes-Antigravity Bridge
-Set WshShell = CreateObject("WScript.Shell")
-WshShell.CurrentDirectory = "{repo_root}"
-Set WshProcessEnv = WshShell.Environment("Process")
-WshProcessEnv("PYTHONPATH") = "{repo_root}\\src"
-UserProfile = WshShell.ExpandEnvironmentStrings("%USERPROFILE%")
-ConfigFile = UserProfile & "\\.config\\hermes-antigravity-bridge\\config.toml"
-PythonCmd = Chr(34) & "{python_exe}" & Chr(34) & " -m hermes_antigravity_bridge.cli --config " & Chr(34) & ConfigFile & Chr(34) & " serve"
-WshShell.Run PythonCmd, 0, False
-""",
-        "Launch-Hermes.bat": """@echo off
-title Hermes AI Assistant
-curl -s -m 1 http://127.0.0.1:8765/health >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
-    echo [*] Starting Hermes-Antigravity Bridge in background...
-    start "" wscript "%USERPROFILE%\\Desktop\\Run-Antigravity-Bridge-Background.vbs"
-    timeout /t 3 /nobreak >nul
-)
-echo Launching Hermes...
-hermes %*
-""",
-        "Stop-Antigravity-Bridge.bat": """@echo off
-title Stop Hermes-Antigravity Bridge
-echo Stopping Hermes-Antigravity Bridge daemon...
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8765" ^| findstr "LISTENING"') do (
-    taskkill /PID %%a /F >nul 2>&1
-)
-echo Bridge daemon stopped.
-timeout /t 2 /nobreak >nul
-""",
-    }
-
-    for name, content in desktop_files.items():
-        dest = desktop_dir / name
-        try:
-            dest.write_text(content, encoding="utf-8")
-            created.append(dest)
-        except OSError:
-            pass
-    return created
+    return []
 
 
 def get_lan_ip() -> str:
@@ -918,8 +886,8 @@ def main() -> int:
         print("Please run 'agy' in your terminal to complete Google authentication.")
     print("=" * 65)
     print("\nHow to run:")
-    print("  1. Double click 'Launch-Hermes.bat' on Desktop (auto-starts bridge and launches Hermes).")
-    print(f"  2. Or start the bridge silently with '{bg_vbs_path.name}' and run 'hermes' in any terminal.")
+    print(f"  1. Start the bridge with '{batch_path.name}' (console) or '{bg_vbs_path.name}' (background).")
+    print("  2. Open any terminal and run 'hermes'. Enjoy!")
     if lan_ip != "127.0.0.1":
         masked_token = (token[:4] + "..." + token[-4:]) if len(token) > 8 else "***"
         print("\n" + "-" * 65)

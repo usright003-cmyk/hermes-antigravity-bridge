@@ -34,7 +34,7 @@
 * 🔄 **Universal Multi-Persona Support**: Non-destructively preserves existing providers (OpenAI, Anthropic Claude, Groq, Ollama) as `fallback_providers`—switch anytime with `/model`! Existing `agy` users connect in 1 second; new users get complete zero-friction defaults.
 * 🔑 **Dual-Mode Flexible Authentication**: Auto-launches default browser for Google OAuth sign-in on desktop, with seamless headless terminal fallback (prints OAuth link & accepts verification code) for remote SSH, headless VPS, and Android Termux.
 * 🛠️ **Automatic Prerequisite Discovery**: 1-click installer automatically detects and installs Google Antigravity CLI (`agy`) via Google's official installer and installs/updates `hermes-agent` if missing.
-* 🪟 **Zero-Black-Window Silent Background Launcher**: Run the bridge in the background without terminal clutter or intrusive popup console windows via `Run-Antigravity-Bridge-Background.vbs`.
+* 🪟 **Zero-Black-Window Silent Background Launcher**: Run the bridge in the background without terminal clutter or intrusive popup console windows via `run-bridge-background.vbs`.
 * 📱 **Android & Termux Pocket Superintelligence**: 100% standalone PRoot Linux execution, pure-Python YAML fallback engine (zero dependency on C compilers), and `/ready` bearer-authenticated health monitoring.
 * 🛡️ **Hermes Cognitive Sovereignty & Fail-Closed Isolation**: Hermes is the sole, undisputed owner of `USER.md`, `MEMORY.md`, SQLite memory databases, and tool execution. Antigravity runs purely as an isolated, stateless reasoning engine (`--sandbox`, `--mode plan`, `toolPermission: strict`).
 * 📊 **Embedded Observability Dashboard**: Built-in glassmorphic web interface (`http://localhost:8765/dashboard`) and `/api/metrics` with zero external CDNs or frameworks.
@@ -87,13 +87,12 @@ irm https://raw.githubusercontent.com/usright003-cmyk/hermes-antigravity-bridge/
 1. **Prerequisite Discovery & Installation**: Auto-detects Python 3.10+. If Google Antigravity CLI (`agy`) is missing, installs it via Google's official install script (`irm https://antigravity.google/cli/install.ps1 | iex`). If `hermes` is missing, auto-installs `hermes-agent`.
 2. **Dual-Mode Guided Authentication**: If already signed in, connects in 1 second. If not yet authenticated, launches your browser or prints the Google OAuth link for terminal verification.
 3. **Non-Destructive Coexistence**: Connects Antigravity (`gemini-3.8-flash` 1M context) as Hermes's primary provider while cleanly preserving all your existing providers (OpenAI, Claude, Groq, Ollama) in `fallback_providers`.
-4. **Auto-Start & Boot Persistence**: The bridge automatically starts running silently in the background upon installation and registers in Windows Startup so it persists across reboots. You can type `hermes` immediately in any terminal!
-5. **Desktop Launchers Created**:
-   * ⚡ **`Launch-Hermes.bat` (Smart 1-Click Launcher)**: Checks if the bridge is running (starts it silently if needed) and drops you straight into Hermes.
-   * 🔕 **`Run-Antigravity-Bridge-Background.vbs` (Silent Background Launcher)**: Starts the bridge in the background with **zero black console window**.
-   * 🖥️ **`Run-Antigravity-Bridge.bat` (Console Launcher)**: Standard launcher opening a console window with live token throughput and request logging.
-   * 🛑 **`Stop-Antigravity-Bridge.bat` (Teardown Script)**: Cleanly stops the background daemon when needed.
-   * 🌐 **`Run-Antigravity-Bridge-LAN.bat` (Multi-Device / Mobile Mode)**: Binds to `0.0.0.0:8765` so your Android phone or local network devices can connect over Wi-Fi.
+4. **Repository Launchers Configured**: Self-contained helper scripts are created directly inside the repository directory (zero desktop clutter and zero unwanted boot persistence):
+   * ⚡ **`launch-hermes.bat` (Smart Launcher)**: Checks if the bridge is running (starts it silently in the background if needed) and drops you straight into Hermes.
+   * 🔕 **`run-bridge-background.vbs` (Silent Background Launcher)**: Starts the bridge in the background with **zero black console window**.
+   * 🖥️ **`run-bridge.bat` (Console Launcher)**: Standard launcher opening a console window with live token throughput and request logging.
+   * 🛑 **`stop-bridge.bat` (Teardown Script)**: Cleanly stops the background daemon when needed.
+   * 🌐 **`run-bridge-lan.bat` (Multi-Device / Mobile Mode)**: Binds to `0.0.0.0:8765` so your Android phone or local network devices can connect over Wi-Fi.
 
 ---
 
@@ -270,7 +269,7 @@ hermes --model gemini-3.8-flash-high
 Once the bridge is running, navigate to `http://localhost:8765/dashboard` in your browser for an embedded, zero-dependency diagnostic console:
 
 * 🟢 **Live Status & Uptime**: Real-time service heartbeat and health monitoring.
-* 🤖 **Model Catalog**: Live status of all 14 Antigravity model variants.
+* 🤖 **Model Catalog**: Live status of all 20 Antigravity model variants.
 * 📈 **Telemetry Counters**: Request counts, active SSE streams, and token throughput.
 * 🛡️ **Isolation Verification**: Visual verification of `--sandbox`, `--mode plan`, and 1M prompt budgeting.
 

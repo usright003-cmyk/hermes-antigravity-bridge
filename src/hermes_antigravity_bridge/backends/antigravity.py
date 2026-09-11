@@ -140,13 +140,35 @@ def is_false_success(result: Mapping[str, Any]) -> bool:
         return False
 
 
-_ALLOWED_INTERNAL_TOOLS = {"generate_image", "image_generation"}
+_ALLOWED_INTERNAL_TOOLS = {
+    "generate_image",
+    "image_generation",
+    "view_file",
+    "read_url_content",
+}
 
 
 def _is_allowed_tool_call(item: Any) -> bool:
     if isinstance(item, dict):
-        name = str(item.get("name") or item.get("function") or "").strip().lower()
-        return name in _ALLOWED_INTERNAL_TOOLS
+        name = str(
+            item.get("name")
+            or item.get("function")
+            or item.get("tool")
+            or item.get("tool_name")
+            or ""
+        ).strip().lower()
+        if name in _ALLOWED_INTERNAL_TOOLS:
+            return True
+        fn = item.get("function")
+        if isinstance(fn, dict):
+            fn_name = str(fn.get("name") or "").strip().lower()
+            if fn_name in _ALLOWED_INTERNAL_TOOLS:
+                return True
+        for subkey in ("tool_calls", "calls", "actions"):
+            sub = item.get(subkey)
+            if isinstance(sub, list) and sub:
+                return all(_is_allowed_tool_call(tc) for tc in sub)
+        return False
     if isinstance(item, list) and item:
         return all(_is_allowed_tool_call(tc) for tc in item)
     return False
@@ -155,6 +177,16 @@ def _is_allowed_tool_call(item: Any) -> bool:
 def event_indicates_internal_tool(event: Mapping[str, Any]) -> bool:
     event_name = str(event.get("event") or event.get("type") or "").strip().lower()
     if event_name in _TOOL_EVENT_NAMES:
+        if event_name in {"tool", "tool_call", "tool-call", "tool_use", "tool-use"}:
+            tc = (
+                event.get("tool_call")
+                or event.get("tool_calls")
+                or event.get("tool")
+                or event.get("call")
+                or event
+            )
+            if _is_allowed_tool_call(tc):
+                return False
         if event_name == "artifact":
             artifact = event.get("artifact") if isinstance(event, dict) else None
             if isinstance(artifact, dict) and any(

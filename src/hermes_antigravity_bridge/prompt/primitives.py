@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
+import mimetypes
 import re
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 _LOW_ENTROPY_RUN_RE = re.compile(r"([^\s])\1{511,}")
 
@@ -22,6 +27,102 @@ def compact_non_latest_text(text: str) -> str:
     return _LOW_ENTROPY_RUN_RE.sub(replacement, text)
 
 
+def _process_media_item(item: dict[str, Any]) -> str:
+    itype = str(item.get("type") or "").strip().lower()
+    url_val = ""
+    kind = "media"
+
+    if itype in {"image_url", "input_image", "image"}:
+        kind = "image"
+        raw = item.get("image_url") or item.get("url")
+        if isinstance(raw, dict):
+            url_val = str(raw.get("url") or "")
+        elif isinstance(raw, str):
+            url_val = raw
+        elif isinstance(item.get("source"), dict):
+            b64 = item["source"].get("data", "")
+            media_type = item["source"].get("media_type", "image/jpeg")
+            url_val = f"data:{media_type};base64,{b64}"
+
+    elif itype in {"video_url", "input_video", "video"}:
+        kind = "video"
+        raw = item.get("video_url") or item.get("url")
+        if isinstance(raw, dict):
+            url_val = str(raw.get("url") or "")
+        elif isinstance(raw, str):
+            url_val = raw
+
+    elif itype in {"audio_url", "input_audio", "audio"}:
+        kind = "audio"
+        raw = item.get("audio_url") or item.get("url")
+        if isinstance(raw, dict):
+            url_val = str(raw.get("url") or "")
+        elif isinstance(raw, str):
+            url_val = raw
+
+    elif itype in {"file_url", "input_file", "file"}:
+        kind = "file"
+        raw = item.get("file_url") or item.get("url")
+        if isinstance(raw, dict):
+            url_val = str(raw.get("url") or "")
+        elif isinstance(raw, str):
+            url_val = raw
+
+    if not url_val:
+        return ""
+
+    if url_val.startswith("data:"):
+        header, _, b64_payload = url_val.partition(",")
+        mime_part = (
+            header.split(";")[0].removeprefix("data:")
+            if ";" in header
+            else header.removeprefix("data:")
+        )
+        mime = mime_part.strip().lower() or "application/octet-stream"
+        ext = mimetypes.guess_extension(mime) or (
+            ".jpg" if kind == "image" else ".mp4" if kind == "video" else ".bin"
+        )
+        if ext == ".jpe":
+            ext = ".jpg"
+
+        try:
+            raw_bytes = base64.b64decode(b64_payload)
+            media_dir = Path.home() / ".gemini" / "antigravity-cli" / "media"
+            media_dir.mkdir(parents=True, exist_ok=True)
+            content_hash = hashlib.sha256(raw_bytes).hexdigest()[:16]
+            file_path = media_dir / f"{kind}_{content_hash}{ext}"
+            if not file_path.exists() or file_path.stat().st_size == 0:
+                file_path.write_bytes(raw_bytes)
+            return f"[Attached {kind} file: {file_path.as_posix()} - use view_file to inspect this {kind}]"
+        except Exception:  # noqa: BLE001
+            return f"[Attached {kind}: data payload decode failed]"
+
+    if url_val.startswith("file://"):
+        parsed = urlparse(url_val)
+        clean_path = unquote(parsed.path)
+        if re.match(r"^/[a-zA-Z]:", clean_path):
+            clean_path = clean_path[1:]
+        clean_file = Path(clean_path)
+        return f"[Attached {kind} file: {clean_file.as_posix()} - use view_file to inspect this {kind}]"
+
+    try:
+        cand_path = Path(url_val)
+        if (
+            cand_path.is_file()
+            or cand_path.is_absolute()
+            or url_val.startswith(("/", "\\", "./", "../"))
+            or bool(re.match(r"^[a-zA-Z]:[/\\]", url_val))
+        ):
+            return f"[Attached {kind} file: {cand_path.as_posix()} - use view_file to inspect this {kind}]"
+    except Exception:  # noqa: BLE001, S110
+        pass
+
+    if url_val.startswith(("http://", "https://")):
+        return f"[Attached {kind} URL: {url_val} - inspect if needed]"
+
+    return f"[Attached {kind}: {url_val}]"
+
+
 def text_content(value: Any) -> str:
     if isinstance(value, str):
         return value
@@ -31,10 +132,28 @@ def text_content(value: Any) -> str:
             if isinstance(item, str):
                 parts.append(item)
             elif isinstance(item, dict):
-                if item.get("type") in {"text", "input_text"}:
-                    parts.append(str(item.get("text", "")))
-                elif item.get("type") in {"image_url", "input_image"}:
-                    parts.append("[image omitted from Antigravity text bridge]")
+                itype = str(item.get("type") or "").strip().lower()
+                if itype in {"text", "input_text"}:
+                    text_val = str(item.get("text", "")).strip()
+                    if text_val:
+                        parts.append(text_val)
+                elif itype in {
+                    "image_url",
+                    "input_image",
+                    "image",
+                    "video_url",
+                    "input_video",
+                    "video",
+                    "audio_url",
+                    "input_audio",
+                    "audio",
+                    "file_url",
+                    "input_file",
+                    "file",
+                }:
+                    media_tag = _process_media_item(item)
+                    if media_tag:
+                        parts.append(media_tag)
         return "\n".join(part for part in parts if part)
     return str(value or "")
 

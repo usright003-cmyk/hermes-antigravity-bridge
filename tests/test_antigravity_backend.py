@@ -352,7 +352,41 @@ class AntigravityBackendTests(unittest.TestCase):
                     elif model_id.startswith("gpt-oss"):
                         self.assertIn(actual_model, ("gpt-oss-120b", "gpt-oss-120b-medium"))
 
+    def test_event_indicates_internal_tool_allows_vision_and_media_tools(self):
+        from hermes_antigravity_bridge.backends.antigravity import event_indicates_internal_tool
+
+        # Allowed tools: view_file, generate_image, read_url_content
+        self.assertFalse(event_indicates_internal_tool({
+            "type": "tool_call",
+            "name": "view_file",
+            "arguments": {"AbsolutePath": "C:/image.jpg"},
+        }))
+        self.assertFalse(event_indicates_internal_tool({
+            "event": "tool_call",
+            "tool_call": {"name": "generate_image", "prompt": "a cat"},
+        }))
+        self.assertFalse(event_indicates_internal_tool({
+            "event": "tool_call",
+            "tool_call": {"name": "read_url_content", "url": "https://example.com"},
+        }))
+        self.assertFalse(event_indicates_internal_tool({
+            "event": "artifact",
+            "artifact": {"path": "C:/brain/eagle.jpg"},
+        }))
+
+        # Blocked dangerous execution tools: run_command, write_to_file, etc.
+        self.assertTrue(event_indicates_internal_tool({
+            "type": "tool_call",
+            "name": "run_command",
+            "arguments": {"command": "ls"},
+        }))
+        self.assertTrue(event_indicates_internal_tool({
+            "event": "tool_call",
+            "tool_call": {"name": "write_to_file", "path": "test.txt"},
+        }))
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

@@ -93,6 +93,39 @@ class PromptPolicyTests(unittest.TestCase):
         self.assertEqual(budget.effective_chars("claude-4-opus"), 767_232)
         self.assertEqual(budget.effective_chars("gpt-5-mini"), 479_232)
 
+    def test_multimodal_image_base64_decoded_to_media_file(self):
+        import base64
+        tiny_png = base64.b64encode(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR").decode("utf-8")
+        data_url = f"data:image/png;base64,{tiny_png}"
+        prompt = self.builder.build([
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is in this picture?"},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            }
+        ])
+        self.assertIn("What is in this picture?", prompt)
+        self.assertIn("[Attached image file:", prompt)
+        self.assertIn("- use view_file to inspect this image]", prompt)
+        self.assertNotIn("data:image/png", prompt)
+
+    def test_multimodal_local_file_path(self):
+        prompt = self.builder.build([
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Inspect this video"},
+                    {"type": "video_url", "video_url": {"url": "file:///C:/Users/HP/video.mp4"}},
+                    {"type": "audio_url", "audio_url": {"url": "C:/Users/HP/audio.mp3"}},
+                ],
+            }
+        ])
+        self.assertIn("[Attached video file: C:/Users/HP/video.mp4 - use view_file to inspect this video]", prompt)
+        self.assertIn("[Attached audio file: C:/Users/HP/audio.mp3 - use view_file to inspect this audio]", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()
+

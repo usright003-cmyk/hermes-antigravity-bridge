@@ -427,7 +427,73 @@ custom_providers:
             self.assertIn("Google authentication pending activation", text)
             self.assertIn("run 'agy'", text)
 
+    def test_supported_antigravity_models_catalog(self):
+        from hermes_antigravity_bridge.backends.antigravity import (
+            DEFAULT_ANTIGRAVITY_MODELS,
+        )
+
+        expected_gemini = [
+            "gemini-3.8-flash",
+            "gemini-3.8-flash-high",
+            "gemini-3.8-flash-medium",
+            "gemini-3.8-flash-low",
+            "gemini-3.7-flash",
+            "gemini-3.7-flash-high",
+            "gemini-3.7-flash-medium",
+            "gemini-3.7-flash-low",
+            "gemini-3.6-flash",
+            "gemini-3.6-flash-high",
+            "gemini-3.6-flash-medium",
+            "gemini-3.6-flash-low",
+            "gemini-3.1-pro",
+            "gemini-3.1-pro-high",
+            "gemini-3.1-pro-low",
+        ]
+        expected_claude = [
+            "claude-sonnet-4-6",
+            "claude-opus-4-6",
+            "claude-opus-4-6-thinking",
+        ]
+        expected_gpt = [
+            "gpt-oss-120b",
+            "gpt-oss-120b-medium",
+        ]
+        expected_all = tuple(expected_gemini + expected_claude + expected_gpt)
+
+        self.assertEqual(len(connect_hermes.SUPPORTED_ANTIGRAVITY_MODELS), 20)
+        self.assertEqual(connect_hermes.SUPPORTED_ANTIGRAVITY_MODELS, expected_all)
+        self.assertEqual(DEFAULT_ANTIGRAVITY_MODELS, expected_all)
+
+    def test_update_hermes_config_writes_api_key_and_model_list(self):
+        cfg_path = self.root / "hermes_full" / "config.yaml"
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg_path.write_text("model: 'old-model'\n", encoding="utf-8")
+
+        connect_hermes.update_hermes_config(cfg_path, token="test-token-12345")
+        parsed = connect_hermes.parse_yaml_fallback(cfg_path.read_text(encoding="utf-8"))
+
+        custom = parsed.get("custom_providers")
+        self.assertIsInstance(custom, list)
+        agy_entry = next((p for p in custom if p.get("name") == "antigravity"), None)
+        self.assertIsNotNone(agy_entry)
+        self.assertEqual(agy_entry.get("api_key"), "test-token-12345")
+        self.assertEqual(agy_entry.get("model"), "gemini-3.8-flash")
+        self.assertEqual(agy_entry.get("models"), list(connect_hermes.SUPPORTED_ANTIGRAVITY_MODELS))
+
+    def test_create_desktop_launchers_is_self_contained(self):
+        fake_desktop = self.root / "desktop"
+        fake_desktop.mkdir(parents=True, exist_ok=True)
+        repo_dir = self.root / "repo"
+        repo_dir.mkdir(parents=True, exist_ok=True)
+
+        with patch("connect_hermes.get_desktop_dir", return_value=fake_desktop):
+            result = connect_hermes.create_desktop_launchers(repo_dir)
+            self.assertEqual(result, [])
+            # Assert desktop directory remains completely untouched
+            self.assertEqual(list(fake_desktop.iterdir()), [])
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

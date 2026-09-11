@@ -321,6 +321,38 @@ class AntigravityBackendTests(unittest.TestCase):
                 self.assertEqual(models, ("gemini-3.1-pro-high",))
                 self.assertEqual(mock_run.call_args.kwargs["timeout"], 15)
 
+    def test_all_canonical_models_command_construction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = self.make_backend(Path(tmp))
+            self.assertEqual(len(DEFAULT_ANTIGRAVITY_MODELS), 20)
+
+            for model_id in DEFAULT_ANTIGRAVITY_MODELS:
+                cmd = backend.build_command(model_id)
+                self.assertIn("--model", cmd)
+                model_idx = cmd.index("--model") + 1
+                actual_model = cmd[model_idx]
+
+                if "gemini" in model_id.lower():
+                    self.assertIn("--effort", cmd)
+                    effort_idx = cmd.index("--effort") + 1
+                    effort_val = cmd[effort_idx]
+                    self.assertIn(effort_val, ("high", "medium", "low"))
+                    if model_id.endswith("-high"):
+                        self.assertEqual(effort_val, "high")
+                    elif model_id.endswith("-low"):
+                        self.assertEqual(effort_val, "low")
+                    else:
+                        self.assertEqual(effort_val, "medium")
+                else:
+                    self.assertNotIn("--effort", cmd)
+                    if model_id.startswith("claude-opus"):
+                        self.assertEqual(actual_model, "claude-opus-4-6-thinking")
+                    elif model_id == "claude-sonnet-4-6":
+                        self.assertEqual(actual_model, "claude-sonnet-4-6")
+                    elif model_id.startswith("gpt-oss"):
+                        self.assertIn(actual_model, ("gpt-oss-120b", "gpt-oss-120b-medium"))
+
 
 if __name__ == "__main__":
     unittest.main()
+

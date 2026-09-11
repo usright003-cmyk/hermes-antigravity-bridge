@@ -261,6 +261,33 @@ class HTTPContractTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["model"], "model-a")
 
+    def test_models_route_and_loopback_discovery(self):
+        # 1. /models unauthenticated succeeds on loopback
+        status, _, body = self.request("/models")
+        self.assertEqual(status, 200)
+        parsed = json.loads(body)
+        self.assertIn("data", parsed)
+        self.assertIn("models", parsed)
+        self.assertEqual([m["id"] for m in parsed["data"]], ["model-a", "model-b"])
+        self.assertEqual([m["name"] for m in parsed["models"]], ["model-a", "model-b"])
+
+        # 2. /models authenticated also succeeds
+        status, _, _ = self.request("/models", auth=True)
+        self.assertEqual(status, 200)
+
+        # 3. /v1/models response shape contains both data and models fields
+        status, _, v1_body = self.request("/v1/models", auth=True)
+        self.assertEqual(status, 200)
+        v1_parsed = json.loads(v1_body)
+        self.assertIn("data", v1_parsed)
+        self.assertIn("models", v1_parsed)
+
+        # 4. /models/<id> model detail and 404 behavior
+        self.assertEqual(self.request("/models/model-a")[0], 200)
+        status, _, body = self.request("/models/not-real")
+        self.assertEqual(status, 404)
+        self.assertIn("unknown model", json.loads(body)["error"]["message"])
+
     def test_model_detail_rejects_unknown_ids(self):
         self.assertEqual(self.request("/v1/models/model-a", auth=True)[0], 200)
         status, _, body = self.request("/v1/models/not-real", auth=True)

@@ -353,7 +353,9 @@ class AntigravityBackendTests(unittest.TestCase):
                         self.assertIn(actual_model, ("gpt-oss-120b", "gpt-oss-120b-medium"))
 
     def test_event_indicates_internal_tool_allows_vision_and_media_tools(self):
-        from hermes_antigravity_bridge.backends.antigravity import event_indicates_internal_tool
+        from hermes_antigravity_bridge.backends.antigravity import (
+            event_indicates_internal_tool,
+        )
 
         # Allowed tools: view_file, generate_image, read_url_content
         self.assertFalse(event_indicates_internal_tool({
@@ -368,6 +370,10 @@ class AntigravityBackendTests(unittest.TestCase):
         self.assertFalse(event_indicates_internal_tool({
             "event": "tool_call",
             "tool_call": {"name": "read_url_content", "url": "https://example.com"},
+        }))
+        self.assertFalse(event_indicates_internal_tool({
+            "event": "tool_call",
+            "tool_call": {"name": "search_web", "query": "bitcoin price"},
         }))
         self.assertFalse(event_indicates_internal_tool({
             "event": "artifact",

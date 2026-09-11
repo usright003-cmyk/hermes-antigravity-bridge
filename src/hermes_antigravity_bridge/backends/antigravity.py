@@ -145,6 +145,7 @@ _ALLOWED_INTERNAL_TOOLS = {
     "image_generation",
     "view_file",
     "read_url_content",
+    "search_web",
 }
 
 

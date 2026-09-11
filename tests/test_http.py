@@ -527,6 +527,9 @@ class HTTPContractTests(unittest.TestCase):
                 content = resp.read().decode("utf-8")
                 self.assertIn("data: [DONE]", content)
                 self.assertIn("Hello ", content)
+                self.assertNotIn("[Bridge Warning:", content)
+                self.assertIn('"finish_reason":"error"', content)
+                self.assertIn('"error":', content)
         finally:
             server.shutdown()
             server.server_close()

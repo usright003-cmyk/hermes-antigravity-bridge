@@ -16,7 +16,13 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from . import __version__
 from .config import BridgeConfig
-from .errors import BackendError, BridgeError
+from .errors import (
+    BackendError,
+    BackendTimeout,
+    BackendUnavailable,
+    BridgeError,
+    ToolIsolationError,
+)
 from .service import ChatCompletionService
 
 _LOG = logging.getLogger(__name__)
@@ -36,8 +42,15 @@ def _json_bytes(value: Any) -> bytes:
 
 
 def _safe_client_message(error: BridgeError) -> str:
+    if isinstance(error, BackendTimeout):
+        return "Antigravity backend timed out waiting for response"
+    if isinstance(error, ToolIsolationError):
+        return "Antigravity attempted internal tool activity; request aborted"
+    if isinstance(error, BackendUnavailable):
+        return "Antigravity CLI is unavailable or not found"
     if isinstance(error, BackendError):
-        return "Antigravity backend request failed"
+        clean_msg = " ".join(str(error).split())[:200]
+        return f"Antigravity backend error: {clean_msg}" if clean_msg else "Antigravity backend request failed"
     return " ".join(str(error).split())[:300]
 
 
@@ -802,21 +815,6 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         except BridgeError as exc:
             _LOG.warning("bridge error during active stream: %s", exc)
             try:
-                fallback_text = f"[Bridge Warning: Stream degraded - {_safe_client_message(exc)}]"
-                text_chunk = {
-                    "id": stream_id,
-                    "object": "chat.completion.chunk",
-                    "created": now,
-                    "model": "",
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {"content": fallback_text},
-                            "finish_reason": None,
-                        }
-                    ],
-                }
-                self.wfile.write(b"data: " + _json_bytes(text_chunk) + b"\n\n")
                 err_chunk = {
                     "id": stream_id,
                     "object": "chat.completion.chunk",
@@ -826,7 +824,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                         {
                             "index": 0,
                             "delta": {},
-                            "finish_reason": "stop",
+                            "finish_reason": "error",
                         }
                     ],
                     "error": {
@@ -846,21 +844,6 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         except Exception:  # noqa: BLE001
             _LOG.exception("unexpected error during active stream")
             try:
-                fallback_text = "[Bridge Error: Unexpected backend stream failure]"
-                text_chunk = {
-                    "id": stream_id,
-                    "object": "chat.completion.chunk",
-                    "created": now,
-                    "model": "",
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {"content": fallback_text},
-                            "finish_reason": None,
-                        }
-                    ],
-                }
-                self.wfile.write(b"data: " + _json_bytes(text_chunk) + b"\n\n")
                 err_chunk = {
                     "id": stream_id,
                     "object": "chat.completion.chunk",
@@ -870,7 +853,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                         {
                             "index": 0,
                             "delta": {},
-                            "finish_reason": "stop",
+                            "finish_reason": "error",
                         }
                     ],
                     "error": {

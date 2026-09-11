@@ -87,5 +87,28 @@ class BridgeConfigTests(unittest.TestCase):
             )
 
 
+    def test_timeout_seconds_env_resolution(self):
+        # 1. Test AGY_TIMEOUT_SECONDS takes precedence
+        config = BridgeConfig.from_mapping(
+            self.base_mapping(),
+            environ={
+                "AGY_BRIDGE_TOKEN": "a-secure-random-looking-token-value",
+                "AGY_TIMEOUT_SECONDS": "450",
+                "AGY_PRINT_TIMEOUT": "200",
+            },
+        )
+        self.assertEqual(config.antigravity.timeout_seconds, 450)
+
+        # 2. Test AGY_PRINT_TIMEOUT fallback works
+        config_fallback = BridgeConfig.from_mapping(
+            self.base_mapping(),
+            environ={
+                "AGY_BRIDGE_TOKEN": "a-secure-random-looking-token-value",
+                "AGY_PRINT_TIMEOUT": "250",
+            },
+        )
+        self.assertEqual(config_fallback.antigravity.timeout_seconds, 250)
+
+
 if __name__ == "__main__":
     unittest.main()

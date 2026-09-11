@@ -359,7 +359,10 @@ class BridgeConfig:
                 env.get("AGY_DEFAULT_MODEL", agy_raw.get("default_model", "gemini-3.8-flash-high"))
             ).strip(),
             timeout_seconds=_as_int(
-                env.get("AGY_PRINT_TIMEOUT", agy_raw.get("timeout_seconds", 300)),
+                env.get(
+                    "AGY_TIMEOUT_SECONDS",
+                    env.get("AGY_PRINT_TIMEOUT", agy_raw.get("timeout_seconds", 300)),
+                ),
                 name="antigravity.timeout_seconds",
                 minimum=1,
                 maximum=3_600,

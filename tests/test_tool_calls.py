@@ -149,6 +149,34 @@ class ToolCallAdapterTests(unittest.TestCase):
         repaired = _repair_json_string(raw)
         self.assertEqual(json.loads(repaired), {"flag": True, "empty": None, "inactive": False})
 
+    def test_repair_json_string_preserves_literals_and_commas_inside_quotes(self):
+        from hermes_antigravity_bridge.tool_calls import _repair_json_string
+        code_sample = "def check():\n    cfg = {'active': True, 'vals': [1, 2, ]}\n    return True\n"
+        raw = f'{{"code": {json.dumps(code_sample)}, "flag": True, "items": [1, 2, ],}}'
+        repaired = _repair_json_string(raw)
+        parsed = json.loads(repaired)
+        self.assertEqual(parsed["code"], code_sample)
+        self.assertTrue(parsed["flag"])
+        self.assertEqual(parsed["items"], [1, 2])
+
+    def test_extract_json_object_returns_proper_end_offset_for_repaired_json(self):
+        from hermes_antigravity_bridge.tool_calls import _extract_json_object
+        text = '{"name": "save_data", "arguments": {"x": True, }, } and some more text'
+        obj, offset = _extract_json_object(text)
+        self.assertIsNotNone(obj)
+        self.assertEqual(obj["name"], "save_data")
+        # Offset should end before " and some more text", not at len(text)
+        self.assertLess(offset, len(text))
+        remaining = text[offset:]
+        self.assertEqual(remaining, " and some more text")
+
+    def test_unclosed_repaired_tool_call_preserves_following_text(self):
+        text = 'Prefix <tool_call>{"name": "save_data", "arguments": {"x": True, }} Middle text'
+        result = parse_tool_calls(text, allowed_tool_names={"save_data"})
+        self.assertEqual(len(result.tool_calls), 1)
+        self.assertEqual(result.tool_calls[0]["function"]["name"], "save_data")
+        self.assertIn("Middle text", result.text)
+
 
 if __name__ == "__main__":
     unittest.main()

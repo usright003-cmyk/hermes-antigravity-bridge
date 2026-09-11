@@ -7,6 +7,7 @@ import hashlib
 import json
 import mimetypes
 import re
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,134 @@ def compact_non_latest_text(text: str) -> str:
         )
 
     return _LOW_ENTROPY_RUN_RE.sub(replacement, text)
+
+
+_SENSITIVE_DIR_NAMES = {
+    ".ssh",
+    ".aws",
+    ".gnupg",
+    ".azure",
+    ".docker",
+    ".kube",
+    ".config",
+    "etc",
+    "windows",
+    "system32",
+}
+_SENSITIVE_FILE_NAMES = (
+    "id_rsa",
+    "id_ed25519",
+    "id_ecdsa",
+    "id_dsa",
+    "jetski_state",
+    "credentials",
+    "shadow",
+    "sam",
+    "passwd",
+    "known_hosts",
+    "authorized_keys",
+    ".env",
+)
+
+
+_LAST_CLEANUP_TS: float = 0.0
+
+
+def cleanup_old_media_files(
+    media_dir: Path | None = None,
+    max_age_days: float | None = None,
+    max_age_hours: float | None = 24.0,
+    max_cache_bytes: int = 500 * 1024 * 1024,
+    force: bool = False,
+) -> int:
+    """Remove media cache files older than 24 hours or when cache exceeds 500MB."""
+    global _LAST_CLEANUP_TS
+    is_default_dir = media_dir is None
+    target_dir = media_dir or (Path.home() / ".gemini" / "antigravity-cli" / "media")
+    if not target_dir.is_dir():
+        return 0
+
+    now = time.time()
+    if is_default_dir and not force and (now - _LAST_CLEANUP_TS) < 60.0:
+        return 0
+    if is_default_dir:
+        _LAST_CLEANUP_TS = now
+
+    if max_age_days is not None:
+        cutoff = now - (max_age_days * 86400)
+    elif max_age_hours is not None:
+        cutoff = now - (max_age_hours * 3600)
+    else:
+        cutoff = now - 86400
+
+    removed = 0
+    surviving: list[tuple[Path, int, float]] = []
+
+    try:
+        for item in target_dir.iterdir():
+            if item.is_file():
+                try:
+                    stat = item.stat()
+                    if stat.st_mtime < cutoff:
+                        item.unlink(missing_ok=True)
+                        removed += 1
+                    else:
+                        surviving.append((item, stat.st_size, stat.st_mtime))
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+    total_bytes = sum(s[1] for s in surviving)
+    if total_bytes > max_cache_bytes:
+        surviving.sort(key=lambda s: s[2])
+        for path, size, _ in surviving:
+            try:
+                path.unlink(missing_ok=True)
+                removed += 1
+                total_bytes -= size
+                if total_bytes <= max_cache_bytes:
+                    break
+            except OSError:
+                pass
+
+    return removed
+
+
+def _is_safe_media_path(cand: Path) -> bool:
+    try:
+        resolved = cand.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+    low_parts = [p.lower() for p in resolved.parts]
+    if any(s in low_parts for s in _SENSITIVE_DIR_NAMES):
+        return False
+    target_name = resolved.name.lower()
+    if any(pat in target_name for pat in _SENSITIVE_FILE_NAMES):
+        return False
+
+    media_dir = (Path.home() / ".gemini" / "antigravity-cli" / "media").resolve()
+    brain_dir = (Path.home() / ".gemini" / "antigravity-cli" / "brain").resolve()
+    cwd_dir = Path.cwd().resolve()
+    user_home = Path.home().resolve()
+
+    safe_roots: list[Path] = [media_dir, brain_dir]
+    is_fs_root = cwd_dir == Path(cwd_dir.anchor).resolve() or cwd_dir == Path("/").resolve()
+    if cwd_dir != user_home and not is_fs_root:
+        safe_roots.append(cwd_dir)
+
+    for root in safe_roots:
+        try:
+            if resolved == root or resolved.is_relative_to(root):
+                return True
+        except (ValueError, AttributeError):
+            try:
+                resolved.relative_to(root)
+                return True
+            except ValueError:
+                pass
+    return False
 
 
 def _process_media_item(item: dict[str, Any]) -> str:
@@ -89,6 +218,7 @@ def _process_media_item(item: dict[str, Any]) -> str:
             raw_bytes = base64.b64decode(b64_payload)
             media_dir = Path.home() / ".gemini" / "antigravity-cli" / "media"
             media_dir.mkdir(parents=True, exist_ok=True)
+            cleanup_old_media_files(media_dir)
             content_hash = hashlib.sha256(raw_bytes).hexdigest()[:16]
             file_path = media_dir / f"{kind}_{content_hash}{ext}"
             if not file_path.exists() or file_path.stat().st_size == 0:
@@ -103,7 +233,9 @@ def _process_media_item(item: dict[str, Any]) -> str:
         if re.match(r"^/[a-zA-Z]:", clean_path):
             clean_path = clean_path[1:]
         clean_file = Path(clean_path)
-        return f"[Attached {kind} file: {clean_file.as_posix()} - use view_file to inspect this {kind}]"
+        if _is_safe_media_path(clean_file):
+            return f"[Attached {kind} file: {clean_file.as_posix()} - use view_file to inspect this {kind}]"
+        return f"[Attached {kind} file: {clean_file.as_posix()} (restricted host path; omitted for security)]"
 
     try:
         cand_path = Path(url_val)
@@ -113,7 +245,9 @@ def _process_media_item(item: dict[str, Any]) -> str:
             or url_val.startswith(("/", "\\", "./", "../"))
             or bool(re.match(r"^[a-zA-Z]:[/\\]", url_val))
         ):
-            return f"[Attached {kind} file: {cand_path.as_posix()} - use view_file to inspect this {kind}]"
+            if _is_safe_media_path(cand_path):
+                return f"[Attached {kind} file: {cand_path.as_posix()} - use view_file to inspect this {kind}]"
+            return f"[Attached {kind} file: {cand_path.as_posix()} (restricted host path; omitted for security)]"
     except Exception:  # noqa: BLE001, S110
         pass
 

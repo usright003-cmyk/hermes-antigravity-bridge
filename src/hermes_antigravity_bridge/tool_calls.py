@@ -23,19 +23,67 @@ _MAX_ARGUMENT_CHARS = 65_536
 
 
 def _repair_json_string(raw: str) -> str:
-    """Best-effort cleanup of common JSON malformations from LLM output."""
+    """Best-effort cleanup of common JSON malformations from LLM output.
+
+    Preserves code and text inside string literals while repairing Python literals
+    and trailing commas outside quotes.
+    """
     s = raw.strip()
     # Strip markdown code fences if present
     s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.IGNORECASE)
     s = re.sub(r"\s*```$", "", s)
     s = s.strip()
-    # Replace unquoted Python booleans/None with JSON literals
-    s = re.sub(r":\s*True\b", ": true", s)
-    s = re.sub(r":\s*False\b", ": false", s)
-    s = re.sub(r":\s*None\b", ": null", s)
-    # Remove trailing commas before closing braces/brackets
-    s = re.sub(r",\s*([}\]])", r"\1", s)
-    return s
+
+    result: list[str] = []
+    in_string = False
+    escape = False
+    outside_buf: list[str] = []
+
+    def flush_outside() -> None:
+        if not outside_buf:
+            return
+        chunk = "".join(outside_buf)
+        outside_buf.clear()
+        # Replace unquoted Python booleans/None with JSON literals outside quotes
+        chunk = re.sub(r"\bTrue\b", "true", chunk)
+        chunk = re.sub(r"\bFalse\b", "false", chunk)
+        chunk = re.sub(r"\bNone\b", "null", chunk)
+        # Remove trailing commas before closing braces/brackets outside quotes
+        chunk = re.sub(r",\s*([}\]])", r"\1", chunk)
+        result.append(chunk)
+
+    for char in s:
+        if escape:
+            escape = False
+            result.append(char)
+            continue
+        if char == "\\" and in_string:
+            escape = True
+            result.append(char)
+            continue
+        if char == '"':
+            if in_string:
+                in_string = False
+                result.append(char)
+            else:
+                flush_outside()
+                in_string = True
+                result.append(char)
+            continue
+        if in_string:
+            if char == "\n":
+                result.append("\\n")
+            elif char == "\r":
+                result.append("\\r")
+            elif char == "\t":
+                result.append("\\t")
+            else:
+                result.append(char)
+        else:
+            outside_buf.append(char)
+
+    flush_outside()
+    return "".join(result)
 
 
 def _extract_json_object(text: str, start_index: int = 0) -> tuple[dict[str, Any] | None, int]:
@@ -48,7 +96,7 @@ def _extract_json_object(text: str, start_index: int = 0) -> tuple[dict[str, Any
     if first_brace == -1:
         return None, start_index
 
-    decoder = json.JSONDecoder()
+    decoder = json.JSONDecoder(strict=False)
     candidate_slice = text[first_brace:]
 
     # 1. Direct raw_decode attempt
@@ -64,7 +112,36 @@ def _extract_json_object(text: str, start_index: int = 0) -> tuple[dict[str, Any
     try:
         obj, offset = decoder.raw_decode(repaired)
         if isinstance(obj, dict):
-            return obj, len(text)
+            depth = 0
+            in_str = False
+            esc = False
+            end_pos = -1
+            for idx, ch in enumerate(candidate_slice):
+                if esc:
+                    esc = False
+                    continue
+                if ch == "\\" and in_str:
+                    esc = True
+                    continue
+                if ch == '"':
+                    in_str = not in_str
+                    continue
+                if in_str:
+                    continue
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end_pos = idx + 1
+                        break
+            if end_pos != -1:
+                fence_m = re.match(r"^\s*```", candidate_slice[end_pos:])
+                if fence_m:
+                    end_pos += fence_m.end()
+                return obj, first_brace + end_pos
+            rel_offset = min(first_brace + offset, len(text))
+            return obj, rel_offset
     except json.JSONDecodeError:
         pass
 
@@ -96,16 +173,20 @@ def _extract_json_object(text: str, start_index: int = 0) -> tuple[dict[str, Any
             depth -= 1
             if depth == 0 and start_pos != -1:
                 block = text[start_pos : i + 1]
+                end_pos = i + 1
+                fence_m = re.match(r"^\s*```", text[end_pos:])
+                if fence_m:
+                    end_pos += fence_m.end()
                 try:
-                    obj = json.loads(block)
+                    obj = json.loads(block, strict=False)
                     if isinstance(obj, dict):
-                        return obj, i + 1
+                        return obj, end_pos
                 except json.JSONDecodeError:
                     repaired_block = _repair_json_string(block)
                     try:
-                        obj = json.loads(repaired_block)
+                        obj = json.loads(repaired_block, strict=False)
                         if isinstance(obj, dict):
-                            return obj, i + 1
+                            return obj, end_pos
                     except json.JSONDecodeError:
                         pass
                 break

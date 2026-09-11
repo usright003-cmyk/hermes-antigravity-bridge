@@ -4,7 +4,7 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from hermes_antigravity_bridge.backends.antigravity import (
     DEFAULT_ANTIGRAVITY_MODELS,
@@ -390,6 +390,62 @@ class AntigravityBackendTests(unittest.TestCase):
             "event": "tool_call",
             "tool_call": {"name": "write_to_file", "path": "test.txt"},
         }))
+
+    def test_terminate_on_windows_invokes_taskkill(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = self.make_backend(Path(tmp))
+            mock_proc = MagicMock()
+            mock_proc.poll.return_value = None
+            mock_proc.pid = 12345
+            with patch("os.name", "nt"), patch("subprocess.run") as mock_run:
+                backend._terminate(mock_proc)
+                mock_run.assert_called_with(
+                    ["taskkill", "/F", "/T", "/PID", "12345"],
+                    capture_output=True,
+                    check=False,
+                )
+
+    def test_stream_reasoning_deltas_extracted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = self.make_backend(Path(tmp))
+            lines = [
+                json.dumps({"event": "step_update", "step_update": {"thought_delta": "Thinking through the problem...", "step_type": "thinking"}}),
+                json.dumps({"event": "step_update", "step_update": {"text_delta": "Final answer", "step_type": "agent_response"}}),
+                json.dumps({"event": "result", "result": {"status": "SUCCESS", "response": "Final answer", "duration_seconds": 0.1, "usage": {"input_tokens": 5, "output_tokens": 5, "total_tokens": 10}}}),
+            ]
+            proc = MagicMock()
+            proc.poll.side_effect = [None, None, 0, 0, 0]
+            proc.stdout = MagicMock()
+            proc.stdout.__iter__.return_value = iter([line + "\n" for line in lines])
+            proc.stdin = MagicMock()
+            proc.wait.return_value = 0
+            with patch("hermes_antigravity_bridge.backends.antigravity.subprocess.Popen", return_value=proc), patch.object(backend, "_terminate"):
+                events = list(backend._stream_attempt("test", "model-a", Path(tmp)))
+                reasoning = [e["content"] for e in events if e.get("type") == "reasoning_delta"]
+                deltas = [e["content"] for e in events if e.get("type") == "delta"]
+                self.assertEqual(reasoning, ["Thinking through the problem..."])
+                self.assertEqual(deltas, ["Final answer"])
+
+    def test_stream_attempt_cancels_and_terminates_on_generator_close(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = self.make_backend(Path(tmp))
+            proc = MagicMock()
+            proc.poll.return_value = None
+            proc.stdout = MagicMock()
+            proc.stdout.__iter__.return_value = iter([
+                json.dumps({"event": "step_update", "step_update": {"text_delta": "chunk1"}}) + "\n",
+                json.dumps({"event": "step_update", "step_update": {"text_delta": "chunk2"}}) + "\n",
+            ])
+            proc.stdin = MagicMock()
+            proc.wait.return_value = 0
+
+            with patch("hermes_antigravity_bridge.backends.antigravity.subprocess.Popen", return_value=proc), patch.object(backend, "_terminate") as mock_terminate:
+                gen = backend._stream_attempt("test", "model-a", Path(tmp))
+                first = next(gen)
+                self.assertEqual(first["content"], "chunk1")
+                # Close generator early
+                gen.close()
+                mock_terminate.assert_called()
 
 
 if __name__ == "__main__":

@@ -528,7 +528,8 @@ class HTTPContractTests(unittest.TestCase):
                 self.assertIn("data: [DONE]", content)
                 self.assertIn("Hello ", content)
                 self.assertNotIn("[Bridge Warning:", content)
-                self.assertIn('"finish_reason":"error"', content)
+                self.assertIn('"finish_reason":"stop"', content)
+                self.assertIn('"model":"model-a"', content)
                 self.assertIn('"error":', content)
         finally:
             server.shutdown()
@@ -617,6 +618,149 @@ class HTTPContractTests(unittest.TestCase):
                 Path(tmp_path).unlink(missing_ok=True)
             except OSError:
                 pass
+
+    def test_cors_options_preflight(self):
+        status, headers, _ = self.request("/v1/chat/completions", method="OPTIONS")
+        self.assertEqual(status, 204)
+        self.assertEqual(headers.get("Access-Control-Allow-Origin"), "*")
+        self.assertIn("OPTIONS", headers.get("Access-Control-Allow-Methods", ""))
+        self.assertIn("Authorization", headers.get("Access-Control-Allow-Headers", ""))
+        self.assertEqual(headers.get("Connection"), "close")
+
+    def test_connection_close_and_cors_headers_on_standard_response(self):
+        status, headers, _ = self.request("/health", method="GET")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("Connection"), "close")
+        self.assertEqual(headers.get("Access-Control-Allow-Origin"), "*")
+
+    def test_chat_completions_endpoint_without_v1_prefix(self):
+        status, _headers, body = self.request(
+            "/chat/completions",
+            method="POST",
+            auth=True,
+            body={"model": "model-a", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual(data["choices"][0]["message"]["content"], "HTTP_OK")
+
+    def test_server_socket_timeout_and_process_request_exception_cleanup(self):
+        from http.server import ThreadingHTTPServer
+        from unittest.mock import MagicMock, patch
+        config = BridgeConfig(
+            server=ServerConfig(host="127.0.0.1", port=0, token="test"),
+            antigravity=AntigravityConfig(binary=Path(sys.executable)),
+            prompt=PromptBudget(),
+        )
+        service = ChatCompletionService(
+            backend=FakeBackend(),
+            prompt_builder=HermesPromptBuilder(),
+            prompt_budget=config.prompt,
+        )
+        server = create_http_server(config, service)
+        try:
+            # 1. Verify get_request sets 30s timeout
+            mock_sock = MagicMock()
+            with patch.object(ThreadingHTTPServer, "get_request", return_value=(mock_sock, ("127.0.0.1", 12345))):
+                _sock, _addr = server.get_request()
+                mock_sock.settimeout.assert_called_with(30.0)
+
+            # 2. Verify process_request closes socket if thread creation raises
+            mock_req = MagicMock()
+            with patch.object(ThreadingHTTPServer, "process_request", side_effect=RuntimeError("thread spawn failed")), \
+                 patch.object(server, "shutdown_request") as mock_shutdown:
+                with self.assertRaises(RuntimeError):
+                    server.process_request(mock_req, ("127.0.0.1", 12345))
+                mock_shutdown.assert_called_with(mock_req)
+        finally:
+            server.server_close()
+
+    def test_streaming_sse_role_first_chunk_only_usage_chunk_and_reasoning(self):
+        class ReasoningAndStreamBackend(FakeBackend):
+            def generate_stream(self, prompt, model, **kwargs):
+                yield {"type": "reasoning_delta", "content": "I am thinking."}
+                yield {"type": "delta", "content": "First words "}
+                yield {"type": "delta", "content": "second words"}
+                yield {
+                    "type": "result",
+                    "response": BackendResponse(
+                        response="First words second words",
+                        model=model,
+                        usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                        status="SUCCESS",
+                        duration_seconds=0.1,
+                    ),
+                }
+
+        token = TEST_TOKEN
+        config = BridgeConfig(
+            server=ServerConfig(host="127.0.0.1", port=0, token=token, request_body_limit_bytes=4096, max_concurrent_requests=1),
+            antigravity=AntigravityConfig(binary=Path(sys.executable)),
+            prompt=PromptBudget(),
+        )
+        service = ChatCompletionService(
+            backend=ReasoningAndStreamBackend(),
+            prompt_builder=HermesPromptBuilder(),
+            prompt_budget=config.prompt,
+        )
+        server = create_http_server(config, service)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            url = f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions"
+            body = json.dumps({
+                "model": "model-a",
+                "messages": [{"role": "user", "content": "test reasoning and usage"}],
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=body,
+                headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                self.assertEqual(resp.status, 200)
+                self.assertEqual(resp.headers.get("Connection"), "close")
+                self.assertEqual(resp.headers.get("Access-Control-Allow-Origin"), "*")
+                content = resp.read().decode("utf-8")
+
+            # Parse SSE chunks
+            chunks = []
+            for line in content.splitlines():
+                if line.startswith("data: ") and line != "data: [DONE]":
+                    chunks.append(json.loads(line.removeprefix("data: ")))
+
+            # Chunk 0: reasoning_delta
+            self.assertIn("reasoning_content", chunks[0]["choices"][0]["delta"])
+            self.assertEqual(chunks[0]["choices"][0]["delta"]["reasoning_content"], "I am thinking.")
+            self.assertNotIn("role", chunks[0]["choices"][0]["delta"])
+
+            # Chunk 1: first text delta has role: assistant
+            self.assertEqual(chunks[1]["choices"][0]["delta"]["content"], "First words ")
+            self.assertEqual(chunks[1]["choices"][0]["delta"]["role"], "assistant")
+
+            # Chunk 2: second text delta does NOT have role
+            self.assertEqual(chunks[2]["choices"][0]["delta"]["content"], "second words")
+            self.assertNotIn("role", chunks[2]["choices"][0]["delta"])
+
+            # Penultimate chunk: standard finish chunk with choices and finish_reason: "stop", no usage
+            finish_chunk = chunks[-2]
+            self.assertEqual(len(finish_chunk["choices"]), 1)
+            self.assertEqual(finish_chunk["choices"][0]["finish_reason"], "stop")
+            self.assertEqual(finish_chunk["choices"][0]["delta"], {})
+            self.assertNotIn("usage", finish_chunk)
+
+            # Final chunk: usage chunk with empty choices list and usage dict
+            usage_chunk = chunks[-1]
+            self.assertEqual(usage_chunk["choices"], [])
+            self.assertIn("usage", usage_chunk)
+            self.assertIn("total_tokens", usage_chunk["usage"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
 
 if __name__ == "__main__":

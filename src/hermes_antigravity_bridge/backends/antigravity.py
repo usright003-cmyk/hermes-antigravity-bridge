@@ -560,14 +560,26 @@ class AntigravityBackend:
         try:
             if os.name == "posix":
                 os.killpg(process.pid, signal.SIGTERM)
-            else:  # pragma: no cover - Linux is the supported service platform
+            elif os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                    capture_output=True,
+                    check=False,
+                )
+            else:
                 process.terminate()
             process.wait(timeout=2)
         except (OSError, subprocess.TimeoutExpired):
             try:
                 if os.name == "posix":
                     os.killpg(process.pid, signal.SIGKILL)
-                else:  # pragma: no cover
+                elif os.name == "nt":
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                        capture_output=True,
+                        check=False,
+                    )
+                else:
                     process.kill()
             except OSError:
                 pass
@@ -583,6 +595,9 @@ class AntigravityBackend:
         cwd: Path,
         on_delta: Callable[[str], None] | None = None,
         effort: str | None = None,
+        on_reasoning_delta: Callable[[str], None] | None = None,
+        cancel_event: threading.Event | None = None,
+        process_holder: list[subprocess.Popen[str]] | None = None,
     ) -> dict[str, Any]:
         command = self.build_command(model, effort=effort)
         try:
@@ -602,6 +617,9 @@ class AntigravityBackend:
         except OSError as exc:
             raise BackendUnavailable("could not start Antigravity CLI") from exc
 
+        if process_holder is not None:
+            process_holder.append(process)
+
         lines: queue.Queue[str | None] = queue.Queue()
 
         def drain_stdout() -> None:
@@ -614,14 +632,23 @@ class AntigravityBackend:
 
         reader = threading.Thread(target=drain_stdout, daemon=True)
         reader.start()
-        assert process.stdin is not None
-        try:
-            if not prompt.endswith("\n"):
-                prompt += "\n"
-            process.stdin.write(prompt)
-            process.stdin.close()
-        except (BrokenPipeError, OSError):
-            pass
+
+        def write_stdin() -> None:
+            assert process.stdin is not None
+            try:
+                text_to_send = prompt if prompt.endswith("\n") else prompt + "\n"
+                process.stdin.write(text_to_send)
+                process.stdin.flush()
+            except (BrokenPipeError, OSError, ValueError):
+                pass
+            finally:
+                try:
+                    process.stdin.close()
+                except (BrokenPipeError, OSError, ValueError):
+                    pass
+
+        writer = threading.Thread(target=write_stdin, daemon=True)
+        writer.start()
 
         deadline = time.monotonic() + self.config.timeout_seconds
         result: dict[str, Any] = {}
@@ -629,12 +656,18 @@ class AntigravityBackend:
         try:
             stream_closed = False
             while not stream_closed:
+                if cancel_event is not None and cancel_event.is_set():
+                    self._terminate(process)
+                    return {}
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise BackendTimeout("Antigravity request timed out")
                 try:
                     line = lines.get(timeout=min(remaining, 0.25))
                 except queue.Empty:
+                    if cancel_event is not None and cancel_event.is_set():
+                        self._terminate(process)
+                        return {}
                     if process.poll() is not None and not reader.is_alive():
                         stream_closed = True
                     continue
@@ -652,12 +685,38 @@ class AntigravityBackend:
                     raise ToolIsolationError(
                         "Antigravity attempted internal tool activity; request aborted"
                     )
-                if on_delta is not None and event.get("event") == "step_update":
+                if event.get("event") == "step_update":
                     step_update = event.get("step_update")
                     if isinstance(step_update, dict):
-                        text_delta = step_update.get("text_delta")
-                        if text_delta:
-                            on_delta(str(text_delta))
+                        thought = (
+                            step_update.get("thought_delta")
+                            or step_update.get("reasoning_delta")
+                            or step_update.get("thinking_delta")
+                        )
+                        step_type = str(step_update.get("step_type", "")).strip().lower()
+                        if thought:
+                            if on_reasoning_delta is not None:
+                                on_reasoning_delta(str(thought))
+                        elif step_type in ("thinking", "thought", "reasoning", "internal_thought"):
+                            text_delta = step_update.get("text_delta")
+                            if text_delta:
+                                if on_reasoning_delta is not None:
+                                    on_reasoning_delta(str(text_delta))
+                                elif on_delta is not None:
+                                    on_delta(str(text_delta))
+                        else:
+                            text_delta = step_update.get("text_delta")
+                            if text_delta and on_delta is not None:
+                                on_delta(str(text_delta))
+                elif event.get("event") in ("thought", "thinking", "reasoning", "reasoning_delta"):
+                    thought = (
+                        event.get("content")
+                        or event.get("text_delta")
+                        or event.get("thought")
+                        or event.get("reasoning")
+                    )
+                    if thought and on_reasoning_delta is not None:
+                        on_reasoning_delta(str(thought))
                 if event.get("event") == "result" and isinstance(event.get("result"), dict):
                     result = dict(event["result"])
             return_code = process.wait(timeout=3)
@@ -670,6 +729,7 @@ class AntigravityBackend:
         finally:
             if process.poll() is None:
                 self._terminate(process)
+            writer.join(timeout=1)
             reader.join(timeout=1)
             if process.stdout is not None:
                 process.stdout.close()
@@ -753,17 +813,32 @@ class AntigravityBackend:
         self, prompt: str, model: str, request_dir: Path, effort: str | None = None
     ) -> Iterator[dict[str, Any]]:
         delta_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+        cancel_event = threading.Event()
+        process_holder: list[subprocess.Popen[str]] = []
 
         def on_delta(delta: str) -> None:
             delta_queue.put({"type": "delta", "content": delta})
+
+        def on_reasoning_delta(delta: str) -> None:
+            delta_queue.put({"type": "reasoning_delta", "content": delta})
 
         worker_error: list[Exception] = []
         final_result: list[dict[str, Any]] = []
 
         def worker() -> None:
             try:
-                res = self._run_attempt(prompt, model, request_dir, on_delta=on_delta, effort=effort)
-                final_result.append(res)
+                res = self._run_attempt(
+                    prompt,
+                    model,
+                    request_dir,
+                    on_delta=on_delta,
+                    effort=effort,
+                    on_reasoning_delta=on_reasoning_delta,
+                    cancel_event=cancel_event,
+                    process_holder=process_holder,
+                )
+                if res:
+                    final_result.append(res)
             except Exception as exc:  # noqa: BLE001 - propagate worker exception to caller
                 worker_error.append(exc)
             finally:
@@ -772,13 +847,18 @@ class AntigravityBackend:
         thread = threading.Thread(target=worker, daemon=True)
         thread.start()
 
-        while True:
-            item = delta_queue.get()
-            if item["type"] == "done":
-                break
-            yield item
+        try:
+            while True:
+                item = delta_queue.get()
+                if item["type"] == "done":
+                    break
+                yield item
+        finally:
+            cancel_event.set()
+            if process_holder:
+                self._terminate(process_holder[0])
+            thread.join(timeout=3)
 
-        thread.join()
         if worker_error:
             exc = worker_error[0]
             if isinstance(exc, BackendError):

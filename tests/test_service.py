@@ -91,8 +91,43 @@ class ChatCompletionServiceTests(unittest.TestCase):
             service.complete({
                 "model": "model-a",
                 "messages": [{"role": "user", "content": "hello"}],
-                "logit_bias": {"1": 2},
+                "completely_unsupported_field_xyz": {"1": 2},
             })
+
+    def test_accepts_and_ignores_standard_openai_metadata_fields(self):
+        service, _ = self.make_service("OK")
+        result = service.complete({
+            "model": "model-a",
+            "messages": [{"role": "user", "content": "hello"}],
+            "logit_bias": {"1": 2},
+            "logprobs": True,
+            "top_logprobs": 2,
+            "metadata": {"session_id": "123"},
+            "store": True,
+            "user": "test-user-id",
+        })
+        self.assertEqual(result.text, "OK")
+
+    def test_structured_json_schema_enforcement_injects_into_prompt(self):
+        service, backend = self.make_service('{"name": "Alice"}')
+        schema = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        }
+        result = service.complete({
+            "model": "model-a",
+            "messages": [{"role": "user", "content": "Who are you?"}],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "person_schema", "schema": schema},
+            },
+        })
+        self.assertEqual(result.text, '{"name": "Alice"}')
+        prompt = backend.prompts[0][0]
+        self.assertIn("CRITICAL REQUIREMENT: You must respond with a valid JSON object strictly conforming to this JSON Schema for 'person_schema':", prompt)
+        self.assertIn('"name": {', prompt)
+        self.assertIn('"type": "string"', prompt)
 
     def test_rejects_invalid_message_and_tool_shapes(self):
         service, _ = self.make_service()
@@ -478,21 +513,34 @@ class ChatCompletionServiceTests(unittest.TestCase):
         from hermes_antigravity_bridge.service import _extract_unstreamed_text
         self.assertEqual(_extract_unstreamed_text("Hello world", "Hello world\nMore text"), "")
 
-    def test_filters_external_image_tools(self):
+    def test_retains_advertised_image_tools(self):
         service, backend = self.make_service("Generated native image")
         result = service.complete({
             "model": "model-a",
             "messages": [{"role": "user", "content": "draw a cat"}],
             "tools": [
-                {"type": "function", "function": {"name": "image_gen", "parameters": {"type": "object"}}},
+                {"type": "function", "function": {"name": "generate_image", "parameters": {"type": "object"}}},
                 {"type": "function", "function": {"name": "terminal", "parameters": {"type": "object"}}},
             ],
         })
         self.assertEqual(result.text, "Generated native image")
-        # Ensure image_gen was filtered out and NOT passed in tools to the prompt
+        # Ensure image generation tools advertised by Hermes are retained in prompt and allowed_names
         built_prompt = backend.prompts[0][0]
-        self.assertNotIn("image_gen", built_prompt)
+        self.assertIn("generate_image", built_prompt)
         self.assertIn("terminal", built_prompt)
+
+    def test_parses_and_delivers_generate_image_tool_call(self):
+        import json
+        response = '<tool_call>{"name":"generate_image","arguments":{"prompt":"a cute cat"}}</tool_call>'
+        service, _ = self.make_service(response)
+        result = service.complete({
+            "model": "model-a",
+            "messages": [{"role": "user", "content": "draw a cat"}],
+            "tools": [{"type": "function", "function": {"name": "generate_image", "parameters": {"type": "object"}}}],
+        })
+        self.assertEqual(len(result.tool_calls), 1)
+        self.assertEqual(result.tool_calls[0]["function"]["name"], "generate_image")
+        self.assertEqual(json.loads(result.tool_calls[0]["function"]["arguments"]), {"prompt": "a cute cat"})
 
     def test_media_tag_streamed_at_end_of_generation(self):
         stream_backend = StreamingFakeBackend(
@@ -511,6 +559,36 @@ class ChatCompletionServiceTests(unittest.TestCase):
         }))
         deltas = [e["content"] for e in events if e.get("type") == "delta"]
         self.assertIn("MEDIA:/tmp/cat.jpg", "".join(deltas))
+
+    def test_complete_stream_yields_reasoning_deltas(self):
+        class ReasoningBackend(FakeBackend):
+            def generate_stream(self, prompt, model, **kwargs):
+                yield {"type": "reasoning_delta", "content": "Analyzing user query..."}
+                yield {"type": "delta", "content": "The answer is 42."}
+                yield {
+                    "type": "result",
+                    "response": BackendResponse(
+                        response="The answer is 42.",
+                        model=model,
+                        usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                        duration_seconds=0.1,
+                    ),
+                }
+
+        service = ChatCompletionService(
+            backend=ReasoningBackend(),
+            prompt_builder=HermesPromptBuilder(),
+            prompt_budget=PromptBudget(),
+        )
+        events = list(service.complete_stream({
+            "model": "model-a",
+            "stream": True,
+            "messages": [{"role": "user", "content": "What is the answer?"}],
+        }))
+        reasoning_events = [e for e in events if e.get("type") == "reasoning_delta"]
+        self.assertEqual(len(reasoning_events), 1)
+        self.assertEqual(reasoning_events[0]["content"], "Analyzing user query...")
+        self.assertEqual(reasoning_events[0]["requested_model"], "model-a")
 
 
 class StreamingFakeBackend(FakeBackend):

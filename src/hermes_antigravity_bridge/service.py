@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 from collections.abc import Iterator
 from typing import Any
 
@@ -33,8 +35,60 @@ _ALLOWED_FIELDS = {
     "reasoning_effort",
     "stream_options",
     "response_format",
+    "logit_bias",
+    "logprobs",
+    "top_logprobs",
+    "modalities",
+    "metadata",
+    "store",
+    "service_tier",
+    "audio",
+    "prediction",
+    "web_search_options",
+    "extra_body",
+    "prompt_cache_key",
+    "dimensions",
+    "encoding_format",
+    "echo",
+    "best_of",
+    "suffix",
 }
 _ALLOWED_ROLES = {"system", "developer", "user", "assistant", "tool"}
+_THOUGHT_RE = re.compile(r"<thought>(.*?)(?:</thought>|$)", re.DOTALL | re.IGNORECASE)
+
+
+def _extract_json_schema_instruction(response_format: Any) -> str | None:
+    """Extract strict JSON schema/object instruction from response_format if requested."""
+    if not isinstance(response_format, dict):
+        return None
+    rf_type = str(response_format.get("type") or "").strip().lower()
+    if rf_type == "json_object":
+        return (
+            "CRITICAL REQUIREMENT: You must respond with a valid JSON object. "
+            "Output ONLY the JSON object without any additional commentary or markdown wrappers."
+        )
+    if rf_type != "json_schema":
+        return None
+    js = response_format.get("json_schema")
+    schema_def: Any = None
+    schema_name = ""
+    if isinstance(js, dict):
+        schema_def = js.get("schema") or js
+        schema_name = str(js.get("name") or "").strip()
+    elif "schema" in response_format:
+        schema_def = response_format.get("schema")
+    if schema_def is not None:
+        schema_json = json.dumps(schema_def, indent=2, ensure_ascii=False)
+        name_clause = f" for '{schema_name}'" if schema_name else ""
+        return (
+            f"CRITICAL REQUIREMENT: You must respond with a valid JSON object strictly conforming to this JSON Schema{name_clause}:\n"
+            f"```json\n{schema_json}\n```\n"
+            "Output ONLY the JSON object without any additional commentary or markdown wrappers."
+        )
+    return (
+        "CRITICAL REQUIREMENT: You must respond with a valid JSON object strictly adhering to the requested JSON schema. "
+        "Output ONLY the JSON object."
+    )
 
 
 _TOOL_CALL_PREFIXES = tuple("<tool_call"[:i] for i in range(len("<tool_call") - 1, 0, -1))
@@ -47,16 +101,8 @@ _EXTERNAL_IMAGE_TOOL_NAMES = {
 
 
 def _filter_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Filter out external image generation tools so Gemini natively uses Google Imagen."""
-    return [
-        tool
-        for tool in tools
-        if not (
-            isinstance(tool, dict)
-            and isinstance(tool.get("function"), dict)
-            and str(tool["function"].get("name", "")).strip().lower() in _EXTERNAL_IMAGE_TOOL_NAMES
-        )
-    ]
+    """Preserve advertised tools including image generation so Hermes can dispatch them."""
+    return list(tools)
 
 
 def _extract_unstreamed_text(full_text: str, streamed_text: str) -> str:
@@ -206,6 +252,32 @@ class ChatCompletionService:
                     penalty_val,
                 )
 
+        for opt_field in (
+            "logit_bias",
+            "logprobs",
+            "top_logprobs",
+            "modalities",
+            "metadata",
+            "store",
+            "service_tier",
+            "audio",
+            "prediction",
+            "web_search_options",
+            "user",
+            "extra_body",
+            "prompt_cache_key",
+            "dimensions",
+            "encoding_format",
+            "echo",
+            "best_of",
+            "suffix",
+        ):
+            if opt_field in body:
+                _LOG.debug(
+                    "request specified %s (accepted and ignored for OpenAI compatibility)",
+                    opt_field,
+                )
+
         requested = body.get("model")
         if not isinstance(requested, str) or not requested.strip():
             raise InvalidRequest("model must be a non-empty string")
@@ -221,8 +293,14 @@ class ChatCompletionService:
             (body.get("max_completion_tokens") or body.get("max_tokens")) if isinstance(body, dict) else None,
         )
         filtered_tools = _filter_tools(tools)
+        schema_instruction = _extract_json_schema_instruction(
+            body.get("response_format") if isinstance(body, dict) else None
+        )
+        prompt_messages = list(messages)
+        if schema_instruction:
+            prompt_messages.append({"role": "system", "content": schema_instruction})
         prompt = self.prompt_builder.build(
-            messages,
+            prompt_messages,
             tools=filtered_tools or None,
             max_chars=max_chars,
         )
@@ -251,8 +329,13 @@ class ChatCompletionService:
             for tool in filtered_tools
             if isinstance(tool.get("function"), dict)
         }
+        raw_response = backend_result.response
+        thought_matches = [m.strip() for m in _THOUGHT_RE.findall(raw_response) if m.strip()]
+        reasoning_content: str | None = "\n\n".join(thought_matches) if thought_matches else None
+        cleaned_response = _THOUGHT_RE.sub("", raw_response).strip()
+
         parsed = parse_tool_calls(
-            backend_result.response,
+            cleaned_response,
             allowed_tool_names=allowed_names,
             mode=self.tool_call_mode,
         )
@@ -262,7 +345,7 @@ class ChatCompletionService:
             "completion_tokens": int(usage.get("output_tokens", 0) or 0),
             "total_tokens": int(usage.get("total_tokens", 0) or 0),
         }
-        if not parsed.text and not parsed.tool_calls:
+        if not parsed.text and not parsed.tool_calls and not reasoning_content:
             raise InvalidRequest("backend produced neither assistant text nor tool calls")
         return ChatCompletionResult(
             text=parsed.text,
@@ -270,6 +353,7 @@ class ChatCompletionService:
             usage=normalized_usage,
             requested_model=requested,
             actual_model=actual_model,
+            reasoning_content=reasoning_content,
         )
 
     def complete_stream(self, body: Any) -> Iterator[dict[str, Any]]:
@@ -280,8 +364,14 @@ class ChatCompletionService:
             (body.get("max_completion_tokens") or body.get("max_tokens")) if isinstance(body, dict) else None,
         )
         filtered_tools = _filter_tools(tools)
+        schema_instruction = _extract_json_schema_instruction(
+            body.get("response_format") if isinstance(body, dict) else None
+        )
+        prompt_messages = list(messages)
+        if schema_instruction:
+            prompt_messages.append({"role": "system", "content": schema_instruction})
         prompt = self.prompt_builder.build(
-            messages,
+            prompt_messages,
             tools=filtered_tools or None,
             max_chars=max_chars,
         )
@@ -312,143 +402,226 @@ class ChatCompletionService:
                         raise
             else:
                 stream_gen = self.backend.generate_stream(prompt, actual_model)
+
             pending_buffer = ""
             streamed_text = ""
             has_tool_call_start = False
-            for event in stream_gen:
-                etype = event.get("type")
-                if etype == "delta":
-                    text = str(event.get("content", ""))
-                    if has_tool_call_start:
-                        continue
-                    pending_buffer += text
-                    lowered = pending_buffer.lower()
-                    if "<tool_call" in lowered:
-                        has_tool_call_start = True
-                        idx = lowered.find("<tool_call")
-                        prefix = pending_buffer[:idx]
-                        if prefix:
-                            streamed_text += prefix
-                            yield {
-                                "type": "delta",
-                                "content": prefix,
-                                "requested_model": requested,
-                                "actual_model": actual_model,
-                            }
-                        pending_buffer = ""
-                    else:
-                        match_len = 0
-                        for pfx in _TOOL_CALL_PREFIXES:
-                            if lowered.endswith(pfx):
-                                match_len = len(pfx)
-                                break
-                        if match_len > 0:
-                            to_emit = pending_buffer[:-match_len]
-                            pending_buffer = pending_buffer[-match_len:]
-                        else:
-                            to_emit = pending_buffer
-                            pending_buffer = ""
-                        if to_emit:
-                            streamed_text += to_emit
-                            yield {
-                                "type": "delta",
-                                "content": to_emit,
-                                "requested_model": requested,
-                                "actual_model": actual_model,
-                            }
-                elif etype == "result":
-                    if not has_tool_call_start and pending_buffer:
-                        streamed_text += pending_buffer
-                        yield {
-                            "type": "delta",
-                            "content": pending_buffer,
-                            "requested_model": requested,
-                            "actual_model": actual_model,
-                        }
-                        pending_buffer = ""
-                    backend_response = event["response"]
-                    try:
-                        parsed = parse_tool_calls(
-                            backend_response.response,
-                            allowed_tool_names=allowed_names,
-                            mode=self.tool_call_mode,
-                        )
-                    except InvalidToolCall as exc:
-                        _LOG.warning("tool call parse failed in stream: %s; degrading to text", exc)
-                        if has_tool_call_start:
-                            raw = backend_response.response
-                            unstreamed = _extract_unstreamed_text(raw, streamed_text)
-                            if unstreamed:
-                                yield {
-                                    "type": "delta",
-                                    "content": unstreamed,
-                                    "requested_model": requested,
-                                    "actual_model": actual_model,
-                                }
-                        yield {
-                            "type": "finish",
-                            "finish_reason": "stop",
-                            "x_bridge_error": {
-                                "type": "tool_call_parse_error",
-                                "message": str(exc),
-                            },
-                            "usage": {
-                                "prompt_tokens": int(backend_response.usage.get("input_tokens", 0) or 0),
-                                "completion_tokens": int(backend_response.usage.get("output_tokens", 0) or 0),
-                                "total_tokens": int(backend_response.usage.get("total_tokens", 0) or 0),
-                            },
-                            "requested_model": requested,
-                            "actual_model": actual_model,
-                        }
-                        return
+            in_thought = False
+            _THOUGHT_START = "<thought>"
+            _THOUGHT_END = "</thought>"
+            _THOUGHT_START_PAG = tuple("<thought"[:i] for i in range(len("<thought") - 1, 0, -1))
+            _THOUGHT_END_PAG = tuple("</thought>"[:i] for i in range(len("</thought>") - 1, 0, -1))
 
-                    usage = backend_response.usage
-                    normalized_usage = {
-                        "prompt_tokens": int(usage.get("input_tokens", 0) or 0),
-                        "completion_tokens": int(usage.get("output_tokens", 0) or 0),
-                        "total_tokens": int(usage.get("total_tokens", 0) or 0),
-                    }
-                    if parsed.tool_calls:
-                        if has_tool_call_start and parsed.text:
-                            unstreamed = _extract_unstreamed_text(parsed.text, streamed_text)
-                            if unstreamed:
-                                yield {
-                                    "type": "delta",
-                                    "content": unstreamed,
-                                    "requested_model": requested,
-                                    "actual_model": actual_model,
-                                }
-                        yield {
-                            "type": "tool_calls",
-                            "tool_calls": parsed.tool_calls,
-                            "requested_model": requested,
-                            "actual_model": actual_model,
+            try:
+                for event in stream_gen:
+                    etype = event.get("type")
+                    if etype == "reasoning_delta":
+                        content = str(event.get("content", ""))
+                        if content:
+                            yield {
+                                "type": "reasoning_delta",
+                                "content": content,
+                                "requested_model": requested,
+                                "actual_model": actual_model,
+                            }
+                    elif etype == "delta":
+                        text = str(event.get("content", ""))
+                        if has_tool_call_start:
+                            continue
+                        pending_buffer += text
+                        while pending_buffer:
+                            if in_thought:
+                                lowered = pending_buffer.lower()
+                                if _THOUGHT_END in lowered:
+                                    idx = lowered.find(_THOUGHT_END)
+                                    part = pending_buffer[:idx]
+                                    if part:
+                                        yield {
+                                            "type": "reasoning_delta",
+                                            "content": part,
+                                            "requested_model": requested,
+                                            "actual_model": actual_model,
+                                        }
+                                    pending_buffer = pending_buffer[idx + len(_THOUGHT_END):]
+                                    in_thought = False
+                                    continue
+                                else:
+                                    match_len = 0
+                                    for pfx in _THOUGHT_END_PAG:
+                                        if lowered.endswith(pfx):
+                                            match_len = len(pfx)
+                                            break
+                                    if match_len > 0:
+                                        to_emit = pending_buffer[:-match_len]
+                                        pending_buffer = pending_buffer[-match_len:]
+                                    else:
+                                        to_emit = pending_buffer
+                                        pending_buffer = ""
+                                    if to_emit:
+                                        yield {
+                                            "type": "reasoning_delta",
+                                            "content": to_emit,
+                                            "requested_model": requested,
+                                            "actual_model": actual_model,
+                                        }
+                                    break
+                            else:
+                                lowered = pending_buffer.lower()
+                                if _THOUGHT_START in lowered:
+                                    idx = lowered.find(_THOUGHT_START)
+                                    prefix = pending_buffer[:idx]
+                                    if prefix:
+                                        streamed_text += prefix
+                                        yield {
+                                            "type": "delta",
+                                            "content": prefix,
+                                            "requested_model": requested,
+                                            "actual_model": actual_model,
+                                        }
+                                    pending_buffer = pending_buffer[idx + len(_THOUGHT_START):]
+                                    in_thought = True
+                                    continue
+                                elif "<tool_call" in lowered:
+                                    has_tool_call_start = True
+                                    idx = lowered.find("<tool_call")
+                                    prefix = pending_buffer[:idx]
+                                    if prefix:
+                                        streamed_text += prefix
+                                        yield {
+                                            "type": "delta",
+                                            "content": prefix,
+                                            "requested_model": requested,
+                                            "actual_model": actual_model,
+                                        }
+                                    pending_buffer = ""
+                                    break
+                                else:
+                                    match_len = 0
+                                    for pfx in _TOOL_CALL_PREFIXES + _THOUGHT_START_PAG:
+                                        if lowered.endswith(pfx):
+                                            match_len = len(pfx)
+                                            break
+                                    if match_len > 0:
+                                        to_emit = pending_buffer[:-match_len]
+                                        pending_buffer = pending_buffer[-match_len:]
+                                    else:
+                                        to_emit = pending_buffer
+                                        pending_buffer = ""
+                                    if to_emit:
+                                        streamed_text += to_emit
+                                        yield {
+                                            "type": "delta",
+                                            "content": to_emit,
+                                            "requested_model": requested,
+                                            "actual_model": actual_model,
+                                        }
+                                    break
+                    elif etype == "result":
+                        if in_thought and pending_buffer:
+                            yield {
+                                "type": "reasoning_delta",
+                                "content": pending_buffer,
+                                "requested_model": requested,
+                                "actual_model": actual_model,
+                            }
+                            pending_buffer = ""
+                            in_thought = False
+                        elif not has_tool_call_start and pending_buffer:
+                            streamed_text += pending_buffer
+                            yield {
+                                "type": "delta",
+                                "content": pending_buffer,
+                                "requested_model": requested,
+                                "actual_model": actual_model,
+                            }
+                            pending_buffer = ""
+                        backend_response = event["response"]
+                        raw = backend_response.response
+                        cleaned_raw = _THOUGHT_RE.sub("", raw).strip()
+                        try:
+                            parsed = parse_tool_calls(
+                                cleaned_raw,
+                                allowed_tool_names=allowed_names,
+                                mode=self.tool_call_mode,
+                            )
+                        except InvalidToolCall as exc:
+                            _LOG.warning("tool call parse failed in stream: %s; degrading to text", exc)
+                            if has_tool_call_start:
+                                unstreamed = _extract_unstreamed_text(cleaned_raw, streamed_text)
+                                if unstreamed:
+                                    yield {
+                                        "type": "delta",
+                                        "content": unstreamed,
+                                        "requested_model": requested,
+                                        "actual_model": actual_model,
+                                    }
+                            yield {
+                                "type": "finish",
+                                "finish_reason": "stop",
+                                "x_bridge_error": {
+                                    "type": "tool_call_parse_error",
+                                    "message": str(exc),
+                                },
+                                "usage": {
+                                    "prompt_tokens": int(backend_response.usage.get("input_tokens", 0) or 0),
+                                    "completion_tokens": int(backend_response.usage.get("output_tokens", 0) or 0),
+                                    "total_tokens": int(backend_response.usage.get("total_tokens", 0) or 0),
+                                },
+                                "requested_model": requested,
+                                "actual_model": actual_model,
+                            }
+                            return
+
+                        usage = backend_response.usage
+                        normalized_usage = {
+                            "prompt_tokens": int(usage.get("input_tokens", 0) or 0),
+                            "completion_tokens": int(usage.get("output_tokens", 0) or 0),
+                            "total_tokens": int(usage.get("total_tokens", 0) or 0),
                         }
-                        yield {
-                            "type": "finish",
-                            "finish_reason": "tool_calls",
-                            "usage": normalized_usage,
-                            "requested_model": requested,
-                            "actual_model": actual_model,
-                        }
-                    else:
-                        if parsed.text:
-                            unstreamed = _extract_unstreamed_text(parsed.text, streamed_text)
-                            if unstreamed:
-                                yield {
-                                    "type": "delta",
-                                    "content": unstreamed,
-                                    "requested_model": requested,
-                                    "actual_model": actual_model,
-                                }
-                        yield {
-                            "type": "finish",
-                            "finish_reason": "stop",
-                            "usage": normalized_usage,
-                            "requested_model": requested,
-                            "actual_model": actual_model,
-                        }
-                    return
+                        if parsed.tool_calls:
+                            if has_tool_call_start and parsed.text:
+                                unstreamed = _extract_unstreamed_text(parsed.text, streamed_text)
+                                if unstreamed:
+                                    yield {
+                                        "type": "delta",
+                                        "content": unstreamed,
+                                        "requested_model": requested,
+                                        "actual_model": actual_model,
+                                    }
+                            yield {
+                                "type": "tool_calls",
+                                "tool_calls": parsed.tool_calls,
+                                "requested_model": requested,
+                                "actual_model": actual_model,
+                            }
+                            yield {
+                                "type": "finish",
+                                "finish_reason": "tool_calls",
+                                "usage": normalized_usage,
+                                "requested_model": requested,
+                                "actual_model": actual_model,
+                            }
+                        else:
+                            if parsed.text:
+                                unstreamed = _extract_unstreamed_text(parsed.text, streamed_text)
+                                if unstreamed:
+                                    yield {
+                                        "type": "delta",
+                                        "content": unstreamed,
+                                        "requested_model": requested,
+                                        "actual_model": actual_model,
+                                    }
+                            yield {
+                                "type": "finish",
+                                "finish_reason": "stop",
+                                "usage": normalized_usage,
+                                "requested_model": requested,
+                                "actual_model": actual_model,
+                            }
+                        return
+            finally:
+                if hasattr(stream_gen, "close"):
+                    stream_gen.close()
         else:
             if reasoning_effort is not None:
                 try:
@@ -461,8 +634,17 @@ class ChatCompletionService:
                         raise
             else:
                 backend_result = self.backend.generate(prompt, actual_model)
+            thought_matches = [m.strip() for m in _THOUGHT_RE.findall(backend_result.response) if m.strip()]
+            for thought_text in thought_matches:
+                yield {
+                    "type": "reasoning_delta",
+                    "content": thought_text,
+                    "requested_model": requested,
+                    "actual_model": actual_model,
+                }
+            cleaned_response = _THOUGHT_RE.sub("", backend_result.response).strip()
             parsed = parse_tool_calls(
-                backend_result.response,
+                cleaned_response,
                 allowed_tool_names=allowed_names,
                 mode=self.tool_call_mode,
             )

@@ -7,6 +7,7 @@ import hmac
 import ipaddress
 import json
 import logging
+import mimetypes
 import socket
 import threading
 import time
@@ -25,9 +26,12 @@ from .errors import (
     BridgeError,
     ToolIsolationError,
 )
+from .prompt.primitives import _is_safe_media_path
 from .service import ChatCompletionService
 
 _LOG = logging.getLogger(__name__)
+_ALLOWED_MEDIA_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg"}
+mimetypes.add_type("image/webp", ".webp")
 
 
 def _is_loopback_ip(ip: str) -> bool:
@@ -362,6 +366,10 @@ class BridgeHTTPServer(ThreadingHTTPServer):
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         except OSError:
             pass
+        try:
+            sock.settimeout(30.0)
+        except OSError:
+            pass
         return sock, addr
 
     def process_request(self, request: Any, client_address: Any) -> None:
@@ -401,6 +409,7 @@ class BridgeHTTPServer(ThreadingHTTPServer):
             super().process_request(request, client_address)
         except Exception:
             self.request_slots.release()
+            self.shutdown_request(request)
             raise
 
     def process_request_thread(self, request: Any, client_address: Any) -> None:
@@ -429,6 +438,18 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: Any) -> None:
         _LOG.info("http %s", fmt % args)
 
+    def do_OPTIONS(self) -> None:
+        try:
+            self.send_response(204)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+            self.send_header("Connection", "close")
+            self.close_connection = True
+            self.end_headers()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
     def _send(
         self,
         status: int,
@@ -440,8 +461,11 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(data)))
+            self.send_header("Connection", "close")
+            self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
+            self.close_connection = True
             self.end_headers()
             self.wfile.write(data)
         except (BrokenPipeError, ConnectionResetError):
@@ -643,6 +667,89 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                 },
             )
             return
+        if path.startswith(("/v1/media/", "/media/")):
+            prefix = "/v1/media/" if path.startswith("/v1/media/") else "/media/"
+            rest = path[len(prefix) :]
+            parts = rest.split("/", 1)
+            if len(parts) != 2:
+                self._error(404, "not found", "not_found_error")
+                return
+            url_token, raw_filename = parts
+            expected_token = self.bridge_server.bridge_config.server.token
+            is_valid_token = bool(
+                expected_token
+                and hmac.compare_digest(url_token.encode("utf-8"), expected_token.encode("utf-8"))
+            )
+            if not is_valid_token and not self._authorized(allow_query_token=True):
+                self._error(401, "unauthorized", "auth_error")
+                return
+
+            filename = unquote(raw_filename).strip()
+            clean_name = Path(filename).name
+            if (
+                not clean_name
+                or clean_name in {".", ".."}
+                or "/" in filename
+                or "\\" in filename
+                or ".." in filename
+                or any(ch in clean_name for ch in "*?[]")
+            ):
+                self._error(400, "invalid filename", "invalid_request_error")
+                return
+
+            if Path(clean_name).suffix.lower() not in _ALLOWED_MEDIA_EXTS:
+                self._error(403, "requested file type is not an allowed media format", "access_denied")
+                return
+
+            media_dir = (Path.home() / ".gemini" / "antigravity-cli" / "media").resolve()
+            target_file = (media_dir / clean_name).resolve()
+            found = False
+            if target_file.is_file() and target_file.is_relative_to(media_dir):
+                found = True
+            else:
+                backend = getattr(self.bridge_server.chat_service, "backend", None)
+                if backend and hasattr(backend, "config"):
+                    brain_base = (
+                        getattr(backend.config, "home", Path.home())
+                        / ".gemini"
+                        / "antigravity-cli"
+                        / "brain"
+                    ).resolve()
+                    if brain_base.is_dir():
+                        for bfile in brain_base.glob(f"*/{clean_name}"):
+                            if (
+                                bfile.is_file()
+                                and bfile.name == clean_name
+                                and bfile.resolve().is_relative_to(brain_base)
+                            ):
+                                target_file = bfile.resolve()
+                                found = True
+                                break
+
+            if not found:
+                self._error(404, "media file not found", "not_found_error")
+                return
+
+            try:
+                data = target_file.read_bytes()
+            except OSError as exc:
+                self._error(500, f"failed to read media file: {exc}", "internal_error")
+                return
+
+            mime_type = mimetypes.guess_type(target_file.name)[0] or "application/octet-stream"
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", mime_type)
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "public, max-age=86400")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Connection", "close")
+                self.close_connection = True
+                self.end_headers()
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError):
+                _LOG.info("client disconnected before media delivery")
+            return
         self._error(404, "not found", "not_found_error")
 
     def do_POST(self) -> None:
@@ -685,7 +792,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         if path in {"/v1/images/generations", "/images/generations"}:
             self._handle_image_generations()
             return
-        if path != "/v1/chat/completions":
+        if path not in {"/v1/chat/completions", "/chat/completions"}:
             self._error(404, "not found", "not_found_error")
             return
         if not self._require_auth():
@@ -743,28 +850,61 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 
         stream_id = "chatcmpl-" + uuid.uuid4().hex
         now = int(time.time())
+        requested_model = str(body.get("model") or "") if isinstance(body, dict) else ""
         self.bridge_server.metrics.record_request(streaming=True)
         try:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "close")
+            self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("X-Accel-Buffering", "no")
+            self.close_connection = True
             self.end_headers()
 
+            has_emitted_role = False
+            pending_media_paths: list[str] = []
+            has_emitted_media_url = False
+
             def emit_item(item: dict[str, Any]) -> None:
+                nonlocal has_emitted_role, has_emitted_media_url
                 itype = item.get("type")
-                if itype == "delta":
-                    self.bridge_server.metrics.record_tokens(1)
+                if itype == "reasoning_delta":
                     chunk = {
                         "id": stream_id,
                         "object": "chat.completion.chunk",
                         "created": now,
-                        "model": item.get("requested_model", ""),
+                        "model": item.get("requested_model", "") or requested_model,
                         "choices": [
                             {
                                 "index": 0,
-                                "delta": {"content": item["content"], "role": "assistant"},
+                                "delta": {"reasoning_content": item["content"]},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                    self.wfile.write(b"data: " + _json_bytes(chunk) + b"\n\n")
+                    self.wfile.flush()
+                elif itype == "delta":
+                    self.bridge_server.metrics.record_tokens(1)
+                    content_str = str(item.get("content", ""))
+                    if "MEDIA:" in content_str:
+                        for line in content_str.splitlines():
+                            if line.strip().startswith("MEDIA:"):
+                                pending_media_paths.append(line.strip().removeprefix("MEDIA:").strip())
+                    delta_payload: dict[str, Any] = {"content": item["content"]}
+                    if not has_emitted_role:
+                        delta_payload["role"] = "assistant"
+                        has_emitted_role = True
+                    chunk = {
+                        "id": stream_id,
+                        "object": "chat.completion.chunk",
+                        "created": now,
+                        "model": item.get("requested_model", "") or requested_model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": delta_payload,
                                 "finish_reason": None,
                             }
                         ],
@@ -776,7 +916,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                         "id": stream_id,
                         "object": "chat.completion.chunk",
                         "created": now,
-                        "model": item.get("requested_model", ""),
+                        "model": item.get("requested_model", "") or requested_model,
                         "choices": [
                             {
                                 "index": 0,
@@ -788,11 +928,50 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                     self.wfile.write(b"data: " + _json_bytes(chunk) + b"\n\n")
                     self.wfile.flush()
                 elif itype == "finish":
+                    if pending_media_paths and not has_emitted_media_url:
+                        token = self.bridge_server.bridge_config.server.token
+                        host = self.bridge_server.bridge_config.server.host
+                        if host in {"0.0.0.0", "::"}:
+                            host = "127.0.0.1"
+                        fallback_host = f"{host}:{self.bridge_server.bridge_config.server.port}"
+                        host_hdr = self.headers.get("Host") or fallback_host
+                        media_dir = (Path.home() / ".gemini" / "antigravity-cli" / "media").resolve()
+                        media_dir.mkdir(parents=True, exist_ok=True)
+                        for m_str in pending_media_paths:
+                            m_path = Path(m_str)
+                            if (
+                                m_path.is_file()
+                                and m_path.suffix.lower() in _ALLOWED_MEDIA_EXTS
+                                and _is_safe_media_path(m_path)
+                            ):
+                                dest = media_dir / m_path.name
+                                if not dest.exists() and dest != m_path.resolve():
+                                    try:
+                                        dest.write_bytes(m_path.read_bytes())
+                                    except OSError:
+                                        pass
+                                media_url = f"http://{host_hdr}/v1/media/{token}/{m_path.name}"
+                                url_chunk = {
+                                    "id": stream_id,
+                                    "object": "chat.completion.chunk",
+                                    "created": now,
+                                    "model": item.get("requested_model", "") or requested_model,
+                                    "choices": [
+                                        {
+                                            "index": 0,
+                                            "delta": {"content": f"\nMEDIA_URL:{media_url}"},
+                                            "finish_reason": None,
+                                        }
+                                    ],
+                                }
+                                self.wfile.write(b"data: " + _json_bytes(url_chunk) + b"\n\n")
+                                self.wfile.flush()
+                        has_emitted_media_url = True
                     chunk = {
                         "id": stream_id,
                         "object": "chat.completion.chunk",
                         "created": now,
-                        "model": item.get("requested_model", ""),
+                        "model": item.get("requested_model", "") or requested_model,
                         "choices": [
                             {
                                 "index": 0,
@@ -803,10 +982,25 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                     }
                     if item.get("x_bridge_error"):
                         chunk["x_bridge_error"] = item["x_bridge_error"]
-                    if item.get("usage") and body.get("stream_options", {}).get("include_usage"):
-                        chunk["usage"] = item["usage"]
                     self.wfile.write(b"data: " + _json_bytes(chunk) + b"\n\n")
                     self.wfile.flush()
+
+                    include_usage = (
+                        isinstance(body, dict)
+                        and isinstance(body.get("stream_options"), dict)
+                        and bool(body["stream_options"].get("include_usage"))
+                    )
+                    if item.get("usage") and include_usage:
+                        usage_chunk = {
+                            "id": stream_id,
+                            "object": "chat.completion.chunk",
+                            "created": now,
+                            "model": item.get("requested_model", "") or requested_model,
+                            "choices": [],
+                            "usage": item["usage"],
+                        }
+                        self.wfile.write(b"data: " + _json_bytes(usage_chunk) + b"\n\n")
+                        self.wfile.flush()
 
             if first_item is not None:
                 emit_item(first_item)
@@ -824,12 +1018,12 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                     "id": stream_id,
                     "object": "chat.completion.chunk",
                     "created": now,
-                    "model": "",
+                    "model": requested_model,
                     "choices": [
                         {
                             "index": 0,
                             "delta": {},
-                            "finish_reason": "error",
+                            "finish_reason": "stop",
                         }
                     ],
                     "error": {
@@ -853,12 +1047,12 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                     "id": stream_id,
                     "object": "chat.completion.chunk",
                     "created": now,
-                    "model": "",
+                    "model": requested_model,
                     "choices": [
                         {
                             "index": 0,
                             "delta": {},
-                            "finish_reason": "error",
+                            "finish_reason": "stop",
                         }
                     ],
                     "error": {
@@ -875,12 +1069,49 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                 self.wfile.flush()
             except (OSError, RuntimeError) as write_err:
                 _LOG.debug("Could not flush SSE error event: %s", write_err)
+        finally:
+            if hasattr(stream_iter, "close"):
+                try:
+                    stream_iter.close()
+                except Exception:  # noqa: BLE001, S110
+                    pass
 
     def _completion_response(self, result: Any) -> dict[str, Any]:
+        content_text = result.text if result.text else None
+        if content_text and "MEDIA:" in content_text and "MEDIA_URL:" not in content_text:
+            token = self.bridge_server.bridge_config.server.token
+            host = self.bridge_server.bridge_config.server.host
+            if host in {"0.0.0.0", "::"}:
+                host = "127.0.0.1"
+            fallback_host = f"{host}:{self.bridge_server.bridge_config.server.port}"
+            host_hdr = self.headers.get("Host") or fallback_host
+            media_dir = (Path.home() / ".gemini" / "antigravity-cli" / "media").resolve()
+            media_dir.mkdir(parents=True, exist_ok=True)
+            for line in content_text.splitlines():
+                sline = line.strip()
+                if sline.startswith("MEDIA:"):
+                    cand_str = sline.removeprefix("MEDIA:").strip()
+                    cand_path = Path(cand_str)
+                    if (
+                        cand_path.is_file()
+                        and cand_path.suffix.lower() in _ALLOWED_MEDIA_EXTS
+                        and _is_safe_media_path(cand_path)
+                    ):
+                        dest = media_dir / cand_path.name
+                        if not dest.exists() and dest != cand_path.resolve():
+                            try:
+                                dest.write_bytes(cand_path.read_bytes())
+                            except OSError:
+                                pass
+                        media_url = f"http://{host_hdr}/v1/media/{token}/{cand_path.name}"
+                        content_text = f"{content_text}\nMEDIA_URL:{media_url}"
+
         message: dict[str, Any] = {
             "role": "assistant",
-            "content": result.text if result.text else None,
+            "content": content_text,
         }
+        if getattr(result, "reasoning_content", None):
+            message["reasoning_content"] = result.reasoning_content
         if result.tool_calls:
             message["tool_calls"] = list(result.tool_calls)
         finish_reason = "tool_calls" if result.tool_calls else "stop"
@@ -998,16 +1229,37 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
+        # Ensure file is available in designated media directory for the /v1/media proxy route
+        media_dir = (Path.home() / ".gemini" / "antigravity-cli" / "media").resolve()
+        media_dir.mkdir(parents=True, exist_ok=True)
+        token = self.bridge_server.bridge_config.server.token
+        if (
+            img_path.suffix.lower() in _ALLOWED_MEDIA_EXTS
+            and _is_safe_media_path(img_path)
+        ):
+            dest_file = media_dir / img_path.name
+            if not dest_file.exists() and dest_file != img_path.resolve():
+                try:
+                    dest_file.write_bytes(img_path.read_bytes())
+                except OSError:
+                    pass
+        host = self.bridge_server.bridge_config.server.host
+        if host in {"0.0.0.0", "::"}:
+            host = "127.0.0.1"
+        fallback_host = f"{host}:{self.bridge_server.bridge_config.server.port}"
+        host_hdr = self.headers.get("Host") or fallback_host
+        proxy_url = f"http://{host_hdr}/v1/media/{token}/{img_path.name}"
+
         now = int(time.time())
         if response_format == "b64_json":
             try:
                 b64_data = base64.b64encode(img_path.read_bytes()).decode("utf-8")
-                data_item: dict[str, Any] = {"b64_json": b64_data, "revised_prompt": prompt}
+                data_item: dict[str, Any] = {"b64_json": b64_data, "revised_prompt": prompt, "proxy_url": proxy_url}
             except OSError as exc:
                 self._error(500, f"failed to read generated image: {exc}", "internal_error")
                 return
         else:
-            data_item = {"url": img_path.as_uri(), "revised_prompt": prompt}
+            data_item = {"url": img_path.as_uri(), "revised_prompt": prompt, "proxy_url": proxy_url}
 
         self.bridge_server.metrics.record_request(streaming=False)
         self._send(

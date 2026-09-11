@@ -1,3 +1,7 @@
+param(
+    [switch]$AutoStart = $false
+)
+
 # Hermes-Antigravity Bridge: 1-Click Automated Setup for Windows
 $ErrorActionPreference = "Stop"
 
@@ -161,13 +165,41 @@ $stopBatContent = @"
 @echo off
 title Stop Hermes-Antigravity Bridge
 echo Stopping Hermes-Antigravity Bridge daemon...
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8765" ^| findstr "LISTENING"') do (
-    taskkill /PID %%a /F >nul 2>&1
-)
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id `$_.OwningProcess -Force -ErrorAction SilentlyContinue }"
 echo Bridge daemon stopped.
 timeout /t 2 /nobreak >nul
 "@
 Set-Content -Path "$InstallDir\stop-bridge.bat" -Value $stopBatContent -Encoding ASCII
+
+$regAutoStartContent = @"
+@echo off
+title Register Hermes-Antigravity Bridge Auto-Start
+echo Registering auto-start on logon via Task Scheduler...
+schtasks /create /tn "HermesAntigravityBridge" /tr "wscript.exe `"%~dp0run-bridge-background.vbs`"" /sc onlogon /f
+if %ERRORLEVEL% EQU 0 (
+    echo Successfully registered Hermes-Antigravity Bridge auto-start!
+) else (
+    echo Failed to register auto-start task.
+)
+timeout /t 3 /nobreak >nul
+"@
+Set-Content -Path "$InstallDir\register-autostart.bat" -Value $regAutoStartContent -Encoding ASCII
+
+$unregAutoStartContent = @"
+@echo off
+title Unregister Hermes-Antigravity Bridge Auto-Start
+echo Removing auto-start task...
+schtasks /delete /tn "HermesAntigravityBridge" /f
+echo Auto-start task removed.
+timeout /t 3 /nobreak >nul
+"@
+Set-Content -Path "$InstallDir\unregister-autostart.bat" -Value $unregAutoStartContent -Encoding ASCII
+
+if ($AutoStart) {
+    Write-Host "[*] Registering auto-start on logon via Windows Task Scheduler..." -ForegroundColor Cyan
+    schtasks /create /tn "HermesAntigravityBridge" /tr "wscript.exe `"$InstallDir\run-bridge-background.vbs`"" /sc onlogon /f | Out-Null
+    Write-Host "[+] Scheduled task 'HermesAntigravityBridge' registered successfully!" -ForegroundColor Green
+}
 
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host " Setup Complete! Hermes is now connected and ready." -ForegroundColor Green
@@ -176,4 +208,6 @@ Write-Host " -> To run bridge in console: $InstallDir\run-bridge.bat" -Foregroun
 Write-Host " -> To run bridge in background: $InstallDir\run-bridge-background.vbs" -ForegroundColor White
 Write-Host " -> To launch Hermes with auto-bridge check: $InstallDir\launch-hermes.bat" -ForegroundColor White
 Write-Host " -> To stop background bridge: $InstallDir\stop-bridge.bat" -ForegroundColor White
+Write-Host " -> To enable auto-start on login: $InstallDir\register-autostart.bat" -ForegroundColor White
+Write-Host " -> To disable auto-start on login: $InstallDir\unregister-autostart.bat" -ForegroundColor White
 Write-Host "==========================================================" -ForegroundColor Cyan

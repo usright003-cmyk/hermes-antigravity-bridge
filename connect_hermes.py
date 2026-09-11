@@ -723,14 +723,71 @@ def create_stop_bridge_batch(repo_root: Path) -> Path:
     content = """@echo off
 title Stop Hermes-Antigravity Bridge
 echo Stopping Hermes-Antigravity Bridge daemon...
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8765" ^| findstr "LISTENING"') do (
-    taskkill /PID %%a /F >nul 2>&1
-)
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }"
 echo Bridge daemon stopped.
 timeout /t 2 /nobreak >nul
 """
     batch_file.write_text(content, encoding="utf-8")
     return batch_file
+
+
+def create_autostart_batches(repo_root: Path) -> tuple[Path, Path]:
+    reg_bat = repo_root / "register-autostart.bat"
+    reg_content = """@echo off
+title Register Hermes-Antigravity Bridge Auto-Start
+echo Registering auto-start on logon via Task Scheduler...
+schtasks /create /tn "HermesAntigravityBridge" /tr "wscript.exe \\"%~dp0run-bridge-background.vbs\\"" /sc onlogon /f
+if %ERRORLEVEL% EQU 0 (
+    echo Successfully registered Hermes-Antigravity Bridge auto-start!
+) else (
+    echo Failed to register auto-start task.
+)
+timeout /t 3 /nobreak >nul
+"""
+    reg_bat.write_text(reg_content, encoding="utf-8")
+
+    unreg_bat = repo_root / "unregister-autostart.bat"
+    unreg_content = """@echo off
+title Unregister Hermes-Antigravity Bridge Auto-Start
+echo Removing auto-start task...
+schtasks /delete /tn "HermesAntigravityBridge" /f
+echo Auto-start task removed.
+timeout /t 3 /nobreak >nul
+"""
+    unreg_bat.write_text(unreg_content, encoding="utf-8")
+    return reg_bat, unreg_bat
+
+
+def register_windows_autostart(repo_root: Path, enable: bool = True) -> bool:
+    """Register or unregister a Windows Scheduled Task to auto-start the bridge daemon on user logon."""
+    if os.name != "nt":
+        return False
+    task_name = "HermesAntigravityBridge"
+    if not enable:
+        res = subprocess.run(
+            ["schtasks", "/delete", "/tn", task_name, "/f"],
+            capture_output=True,
+            check=False,
+        )
+        return res.returncode == 0
+
+    vbs_path = repo_root / "run-bridge-background.vbs"
+    if not vbs_path.exists():
+        create_background_launcher_vbs(repo_root)
+
+    cmd = [
+        "schtasks",
+        "/create",
+        "/tn",
+        task_name,
+        "/tr",
+        f'wscript.exe "{vbs_path}"',
+        "/sc",
+        "onlogon",
+        "/f",
+    ]
+    res = subprocess.run(cmd, capture_output=True, check=False)
+    return res.returncode == 0
 
 
 def create_desktop_launchers(repo_root: Path) -> list[Path]:
@@ -744,6 +801,7 @@ def create_desktop_launchers(repo_root: Path) -> list[Path]:
     create_background_launcher_vbs(repo_root)
     create_launch_hermes_batch(repo_root)
     create_stop_bridge_batch(repo_root)
+    create_autostart_batches(repo_root)
     return []
 
 
@@ -817,6 +875,19 @@ def main() -> int:
         default=True,
         help="Synchronize Google authentication tokens into the isolated profile (default: True)",
     )
+    parser.add_argument(
+        "--autostart",
+        dest="autostart",
+        action="store_true",
+        default=False,
+        help="Register a Windows Scheduled Task to auto-start the bridge daemon on login",
+    )
+    parser.add_argument(
+        "--no-autostart",
+        dest="autostart",
+        action="store_false",
+        help="Do not register auto-start on login",
+    )
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parent
@@ -876,6 +947,13 @@ def main() -> int:
         print("[+] Desktop Shortcuts created:")
         for dl in desktop_launchers:
             print(f"    - {dl}")
+
+    if getattr(args, "autostart", False):
+        success = register_windows_autostart(repo_root, enable=True)
+        if success:
+            print("[+] Registered Windows Scheduled Task: HermesAntigravityBridge (starts on logon)")
+        else:
+            print("[!] Could not register Windows Scheduled Task")
 
     print("=" * 65)
     if is_antigravity_authenticated():

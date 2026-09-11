@@ -32,6 +32,7 @@ class ChatCompletionResult:
     usage: JsonObject
     requested_model: str
     actual_model: str
+    reasoning_content: str | None = None
 
 
 class TextBackend(Protocol):

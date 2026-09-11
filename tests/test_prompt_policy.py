@@ -112,18 +112,35 @@ class PromptPolicyTests(unittest.TestCase):
         self.assertNotIn("data:image/png", prompt)
 
     def test_multimodal_local_file_path(self):
+        from pathlib import Path
+        safe_media = (Path.home() / ".gemini" / "antigravity-cli" / "media" / "video.mp4").as_posix()
+        safe_proj = (Path.cwd() / "audio.mp3").as_posix()
         prompt = self.builder.build([
             {
                 "role": "user",
                 "content": [
                     {"type": "text", "text": "Inspect this video"},
-                    {"type": "video_url", "video_url": {"url": "file:///C:/Users/HP/video.mp4"}},
-                    {"type": "audio_url", "audio_url": {"url": "C:/Users/HP/audio.mp3"}},
+                    {"type": "video_url", "video_url": {"url": f"file:///{safe_media}"}},
+                    {"type": "audio_url", "audio_url": {"url": safe_proj}},
                 ],
             }
         ])
-        self.assertIn("[Attached video file: C:/Users/HP/video.mp4 - use view_file to inspect this video]", prompt)
-        self.assertIn("[Attached audio file: C:/Users/HP/audio.mp3 - use view_file to inspect this audio]", prompt)
+        self.assertIn(f"[Attached video file: {safe_media} - use view_file to inspect this video]", prompt)
+        self.assertIn(f"[Attached audio file: {safe_proj} - use view_file to inspect this audio]", prompt)
+
+    def test_multimodal_sensitive_host_path_is_sandboxed(self):
+        prompt = self.builder.build([
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Secret inspection"},
+                    {"type": "file_url", "file_url": {"url": "file:///etc/shadow"}},
+                    {"type": "file_url", "file_url": {"url": "C:/Windows/System32/config/SAM"}},
+                ],
+            }
+        ])
+        self.assertNotIn("use view_file to inspect this file", prompt)
+        self.assertIn("restricted host path; omitted for security", prompt)
 
 
 if __name__ == "__main__":

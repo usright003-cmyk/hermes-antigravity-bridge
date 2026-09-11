@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hmac
 import ipaddress
 import json
@@ -11,6 +12,7 @@ import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -680,6 +682,9 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                 return
             self._send(200, {"model": model, "name": model, "details": {"family": "antigravity"}})
             return
+        if path in {"/v1/images/generations", "/images/generations"}:
+            self._handle_image_generations()
+            return
         if path != "/v1/chat/completions":
             self._error(404, "not found", "not_found_error")
             return
@@ -890,6 +895,128 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             "usage": result.usage,
             "x_antigravity_model": result.actual_model,
         }
+
+    def _handle_image_generations(self) -> None:
+        if not self._require_auth():
+            return
+        content_type = self.headers.get_content_type()
+        if content_type != "application/json":
+            self._error(415, "Content-Type must be application/json", "invalid_request_error")
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        limit = self.bridge_server.bridge_config.server.request_body_limit_bytes
+        if length <= 0:
+            self._error(400, "request body is empty", "invalid_request_error")
+            return
+        if length > limit:
+            self._error(413, "request body exceeds configured limit", "request_too_large")
+            return
+        try:
+            raw = self.rfile.read(length)
+            payload = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._error(400, "request body is not valid UTF-8 JSON", "invalid_request_error")
+            return
+        if not isinstance(payload, dict):
+            self._error(400, "request body must be a JSON object", "invalid_request_error")
+            return
+
+        prompt = str(payload.get("prompt") or "").strip()
+        if not prompt:
+            self._error(400, "prompt must be a non-empty string", "invalid_request_error")
+            return
+
+        response_format = str(payload.get("response_format") or "url").strip().lower()
+        if response_format not in {"url", "b64_json"}:
+            self._error(400, "response_format must be 'url' or 'b64_json'", "invalid_request_error")
+            return
+
+        backend = getattr(self.bridge_server.chat_service, "backend", None)
+        if backend is None:
+            self._error(500, "backend is unavailable", "internal_error")
+            return
+
+        requested_model = str(payload.get("model") or "").strip()
+        if not requested_model:
+            try:
+                available = backend.list_models()
+                requested_model = available[0] if available else "gemini-3.8-flash"
+            except Exception:  # noqa: BLE001
+                requested_model = "gemini-3.8-flash"
+
+        try:
+            actual_model = backend.resolve_model(requested_model)
+            image_prompt = (
+                f"Please generate an image using your native generate_image tool. "
+                f"Image prompt: {prompt}"
+            )
+            backend_res = backend.generate(image_prompt, actual_model)
+        except BridgeError as exc:
+            self._error(exc.status_code, _safe_client_message(exc), exc.error_type)
+            return
+        except Exception:  # noqa: BLE001
+            _LOG.exception("image generation failed")
+            self._error(500, "internal image generation failure", "internal_error")
+            return
+
+        img_path: Path | None = None
+        for line in backend_res.response.splitlines():
+            if line.startswith("MEDIA:"):
+                cand = Path(line.removeprefix("MEDIA:").strip())
+                if cand.is_file():
+                    img_path = cand
+                    break
+
+        if not img_path and backend_res.conversation_id:
+            for base_dir in (Path.home(), getattr(backend.config, "home", Path.home())):
+                brain_dir = base_dir / ".gemini" / "antigravity-cli" / "brain" / str(backend_res.conversation_id)
+                if brain_dir.is_dir():
+                    try:
+                        files = sorted(
+                            [
+                                f
+                                for f in brain_dir.iterdir()
+                                if f.is_file() and f.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
+                            ],
+                            key=lambda p: p.stat().st_mtime,
+                            reverse=True,
+                        )
+                        if files:
+                            img_path = files[0]
+                            break
+                    except OSError:
+                        pass
+
+        if not img_path:
+            self._error(
+                502,
+                f"no image was generated by backend: {backend_res.response[:200]}",
+                "backend_error",
+            )
+            return
+
+        now = int(time.time())
+        if response_format == "b64_json":
+            try:
+                b64_data = base64.b64encode(img_path.read_bytes()).decode("utf-8")
+                data_item: dict[str, Any] = {"b64_json": b64_data, "revised_prompt": prompt}
+            except OSError as exc:
+                self._error(500, f"failed to read generated image: {exc}", "internal_error")
+                return
+        else:
+            data_item = {"url": img_path.as_uri(), "revised_prompt": prompt}
+
+        self.bridge_server.metrics.record_request(streaming=False)
+        self._send(
+            200,
+            {
+                "created": now,
+                "data": [data_item],
+            },
+        )
 
     def _sse_response(self, response: dict[str, Any]) -> bytes:
         choice = response["choices"][0]

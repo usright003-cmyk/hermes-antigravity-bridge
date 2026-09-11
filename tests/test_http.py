@@ -535,6 +535,89 @@ class HTTPContractTests(unittest.TestCase):
             server.server_close()
             thread.join(timeout=2)
 
+    def test_image_generations_endpoint(self):
+        import base64
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            tmp.write(b"IMAGE_CONTENT_BYTES")
+            tmp_path = tmp.name
+
+        class ImageBackend(FakeBackend):
+            def generate(self, prompt, model):
+                return BackendResponse(
+                    response=f"Here is your image\n\nMEDIA:{Path(tmp_path).as_posix()}",
+                    model=model,
+                    usage={},
+                )
+
+        token = TEST_TOKEN
+        config = BridgeConfig(
+            server=ServerConfig(
+                host="127.0.0.1",
+                port=0,
+                token=token,
+                request_body_limit_bytes=4096,
+                max_concurrent_requests=1,
+            ),
+            antigravity=AntigravityConfig(binary=Path(sys.executable)),
+            prompt=PromptBudget(),
+        )
+        service = ChatCompletionService(
+            backend=ImageBackend(),
+            prompt_builder=HermesPromptBuilder(),
+            prompt_budget=config.prompt,
+        )
+        server = create_http_server(config, service)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        try:
+            # 1. URL response format
+            req = urllib.request.Request(
+                f"{base}/v1/images/generations",
+                data=json.dumps({"prompt": "sunset over mountain"}).encode("utf-8"),
+                headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                self.assertEqual(resp.status, 200)
+                data = json.loads(resp.read().decode("utf-8"))
+                self.assertIn("data", data)
+                self.assertTrue(data["data"][0]["url"].startswith("file:///"))
+
+            # 2. b64_json response format
+            req = urllib.request.Request(
+                f"{base}/v1/images/generations",
+                data=json.dumps({"prompt": "sunset", "response_format": "b64_json"}).encode("utf-8"),
+                headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                self.assertEqual(resp.status, 200)
+                data = json.loads(resp.read().decode("utf-8"))
+                b64 = data["data"][0]["b64_json"]
+                self.assertEqual(base64.b64decode(b64), b"IMAGE_CONTENT_BYTES")
+
+            # 3. Bad request - empty prompt
+            req = urllib.request.Request(
+                f"{base}/v1/images/generations",
+                data=json.dumps({"prompt": ""}).encode("utf-8"),
+                headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+                method="POST",
+            )
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(req, timeout=5)
+            self.assertEqual(ctx.exception.code, 400)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            try:
+                Path(tmp_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -140,15 +140,37 @@ def is_false_success(result: Mapping[str, Any]) -> bool:
         return False
 
 
+_ALLOWED_INTERNAL_TOOLS = {"generate_image", "image_generation"}
+
+
+def _is_allowed_tool_call(item: Any) -> bool:
+    if isinstance(item, dict):
+        name = str(item.get("name") or item.get("function") or "").strip().lower()
+        return name in _ALLOWED_INTERNAL_TOOLS
+    if isinstance(item, list) and item:
+        return all(_is_allowed_tool_call(tc) for tc in item)
+    return False
+
+
 def event_indicates_internal_tool(event: Mapping[str, Any]) -> bool:
     event_name = str(event.get("event") or event.get("type") or "").strip().lower()
     if event_name in _TOOL_EVENT_NAMES:
+        if event_name == "artifact":
+            artifact = event.get("artifact") if isinstance(event, dict) else None
+            if isinstance(artifact, dict) and any(
+                str(artifact.get("path") or artifact.get("filename") or "").lower().endswith(ext)
+                for ext in (".jpg", ".jpeg", ".png", ".webp")
+            ):
+                return False
         return True
 
     def contains_tool_key(value: Any) -> bool:
         if isinstance(value, dict):
             for key, item in value.items():
-                if str(key).lower() in _TOOL_KEYS and item not in (None, False, "", [], {}):
+                k_low = str(key).lower()
+                if k_low in _TOOL_KEYS and item not in (None, False, "", [], {}):
+                    if k_low in {"tool_call", "tool_calls", "tool_use", "tool_uses"} and _is_allowed_tool_call(item):
+                        continue
                     return True
                 if contains_tool_key(item):
                     return True
@@ -633,6 +655,32 @@ class AntigravityBackend:
         response = str(result.get("response") or "").strip()
         if not response:
             raise BackendProtocolError("Antigravity returned an empty response")
+
+        # Discover native Google Imagen generated images for this turn and attach MEDIA tag for Hermes
+        conv_id = result.get("conversation_id")
+        if conv_id:
+            for base_dir in (Path.home(), self.config.home):
+                brain_dir = base_dir / ".gemini" / "antigravity-cli" / "brain" / str(conv_id)
+                if brain_dir.is_dir():
+                    try:
+                        img_files = sorted(
+                            [
+                                f
+                                for f in brain_dir.iterdir()
+                                if f.is_file() and f.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
+                            ],
+                            key=lambda p: p.stat().st_mtime,
+                            reverse=True,
+                        )
+                        if img_files:
+                            img_path = img_files[0]
+                            media_tag = f"MEDIA:{img_path.as_posix()}"
+                            if media_tag not in response:
+                                response = f"{response}\n\n{media_tag}".strip()
+                            break
+                    except OSError:
+                        pass
+
         result["response"] = response
         return result
 

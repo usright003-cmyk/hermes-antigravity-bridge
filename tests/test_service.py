@@ -478,6 +478,40 @@ class ChatCompletionServiceTests(unittest.TestCase):
         from hermes_antigravity_bridge.service import _extract_unstreamed_text
         self.assertEqual(_extract_unstreamed_text("Hello world", "Hello world\nMore text"), "")
 
+    def test_filters_external_image_tools(self):
+        service, backend = self.make_service("Generated native image")
+        result = service.complete({
+            "model": "model-a",
+            "messages": [{"role": "user", "content": "draw a cat"}],
+            "tools": [
+                {"type": "function", "function": {"name": "image_gen", "parameters": {"type": "object"}}},
+                {"type": "function", "function": {"name": "terminal", "parameters": {"type": "object"}}},
+            ],
+        })
+        self.assertEqual(result.text, "Generated native image")
+        # Ensure image_gen was filtered out and NOT passed in tools to the prompt
+        built_prompt = backend.prompts[0][0]
+        self.assertNotIn("image_gen", built_prompt)
+        self.assertIn("terminal", built_prompt)
+
+    def test_media_tag_streamed_at_end_of_generation(self):
+        stream_backend = StreamingFakeBackend(
+            chunks=["Here is your ", "image:\n"],
+            final_response="Here is your image:\n\nMEDIA:/tmp/cat.jpg",
+        )
+        service = ChatCompletionService(
+            backend=stream_backend,
+            prompt_builder=HermesPromptBuilder(),
+            prompt_budget=PromptBudget(),
+        )
+        events = list(service.complete_stream({
+            "model": "model-a",
+            "stream": True,
+            "messages": [{"role": "user", "content": "draw a cat"}],
+        }))
+        deltas = [e["content"] for e in events if e.get("type") == "delta"]
+        self.assertIn("MEDIA:/tmp/cat.jpg", "".join(deltas))
+
 
 class StreamingFakeBackend(FakeBackend):
     def __init__(self, chunks, final_response=None, usage=None):

@@ -38,6 +38,25 @@ _ALLOWED_ROLES = {"system", "developer", "user", "assistant", "tool"}
 
 
 _TOOL_CALL_PREFIXES = tuple("<tool_call"[:i] for i in range(len("<tool_call") - 1, 0, -1))
+_EXTERNAL_IMAGE_TOOL_NAMES = {
+    "image_gen",
+    "image_generation",
+    "generate_image",
+    "text_to_image",
+}
+
+
+def _filter_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Filter out external image generation tools so Gemini natively uses Google Imagen."""
+    return [
+        tool
+        for tool in tools
+        if not (
+            isinstance(tool, dict)
+            and isinstance(tool.get("function"), dict)
+            and str(tool["function"].get("name", "")).strip().lower() in _EXTERNAL_IMAGE_TOOL_NAMES
+        )
+    ]
 
 
 def _extract_unstreamed_text(full_text: str, streamed_text: str) -> str:
@@ -201,9 +220,10 @@ class ChatCompletionService:
             actual_model,
             (body.get("max_completion_tokens") or body.get("max_tokens")) if isinstance(body, dict) else None,
         )
+        filtered_tools = _filter_tools(tools)
         prompt = self.prompt_builder.build(
             messages,
-            tools=tools or None,
+            tools=filtered_tools or None,
             max_chars=max_chars,
         )
         _LOG.info(
@@ -228,7 +248,7 @@ class ChatCompletionService:
             backend_result = self.backend.generate(prompt, actual_model)
         allowed_names = {
             str(tool["function"]["name"])
-            for tool in tools
+            for tool in filtered_tools
             if isinstance(tool.get("function"), dict)
         }
         parsed = parse_tool_calls(
@@ -259,9 +279,10 @@ class ChatCompletionService:
             actual_model,
             (body.get("max_completion_tokens") or body.get("max_tokens")) if isinstance(body, dict) else None,
         )
+        filtered_tools = _filter_tools(tools)
         prompt = self.prompt_builder.build(
             messages,
-            tools=tools or None,
+            tools=filtered_tools or None,
             max_chars=max_chars,
         )
         _LOG.info(
@@ -274,7 +295,7 @@ class ChatCompletionService:
         )
         allowed_names = {
             str(tool["function"]["name"])
-            for tool in tools
+            for tool in filtered_tools
             if isinstance(tool.get("function"), dict)
         }
 
@@ -411,7 +432,7 @@ class ChatCompletionService:
                             "actual_model": actual_model,
                         }
                     else:
-                        if has_tool_call_start and parsed.text:
+                        if parsed.text:
                             unstreamed = _extract_unstreamed_text(parsed.text, streamed_text)
                             if unstreamed:
                                 yield {

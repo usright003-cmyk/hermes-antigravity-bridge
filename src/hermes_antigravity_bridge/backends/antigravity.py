@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import queue
+import re
 import shutil
 import signal
 import subprocess
@@ -77,15 +78,51 @@ _TOOL_KEYS = {
 }
 
 
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
+_MODEL_SKIP_PREFIXES = (
+    "fetching",
+    "available",
+    "model id",
+    "model_id",
+    "name",
+    "id",
+    "account",
+    "logged",
+    "project",
+    "using",
+    "authenticated",
+    "session",
+    "total",
+    "warning",
+    "info",
+    "error",
+)
+_MODEL_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._/-]{2,}$")
+
+
 def parse_model_ids(output: str) -> tuple[str, ...]:
     ids: list[str] = []
-    for line in (output or "").splitlines():
-        line = line.strip()
-        if not line or line.lower().startswith("fetching "):
+    for raw_line in (output or "").splitlines():
+        line = _ANSI_ESCAPE_RE.sub("", raw_line).strip()
+        if not line or line.endswith(":"):
             continue
-        parts = line.split("\t", 1)
+        low = line.lower()
+        if any(low.startswith(prefix) for prefix in _MODEL_SKIP_PREFIXES):
+            continue
+        if low.startswith(("-", "=", "*", "#")):
+            continue
+        parts = re.split(r"\t+|\s{2,}", line, maxsplit=1)
         model_id = parts[0].strip()
-        if model_id and model_id not in ids:
+        if " " in model_id:
+            token = model_id.split()[0].strip()
+            if token and not token.startswith(("-", "=", "*", "#")):
+                model_id = token
+        if (
+            model_id
+            and _MODEL_ID_RE.match(model_id)
+            and model_id.lower() not in ("model", "models", "description", "details", "alias", "name", "id", "version", "status")
+            and model_id not in ids
+        ):
             ids.append(model_id)
     return tuple(ids)
 
@@ -274,6 +311,8 @@ class AntigravityBackend:
         env["HOME"] = str(self.config.home)
         if os.name == "nt":
             env["USERPROFILE"] = str(self.config.home)
+        for var in ("XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"):
+            env.pop(var, None)
         env.setdefault("NO_COLOR", "1")
         return env
 
@@ -417,18 +456,27 @@ class AntigravityBackend:
                     timeout=min(self.config.timeout_seconds, 15),
                     check=False,
                 )
+                if completed.returncode != 0:
+                    _LOG.warning(
+                        "agy models returned non-zero exit code %d: stdout=%r stderr=%r",
+                        completed.returncode,
+                        completed.stdout,
+                        completed.stderr,
+                    )
                 models = parse_model_ids(completed.stdout) if completed.returncode == 0 else ()
-            except (OSError, subprocess.TimeoutExpired, Exception):  # noqa: BLE001 - fallback if binary discovery fails
+                if not models and completed.stderr and completed.returncode == 0:
+                    models = parse_model_ids(completed.stderr)
+            except subprocess.TimeoutExpired as exc:
+                _LOG.warning(
+                    "agy models discovery timed out after %s seconds; falling back to default models",
+                    exc.timeout,
+                )
+                models = ()
+            except Exception as exc:  # noqa: BLE001 - fallback if binary discovery fails
+                _LOG.warning("agy models discovery error: %s; falling back to default models", exc)
                 models = ()
             if models:
                 self._model_source = "discovered"
-                # If discovered models come from standard Antigravity CLI, ensure canonical models are present
-                if any("gemini-3.8-flash" in m for m in models) or any("claude" in m for m in models):
-                    merged: list[str] = list(DEFAULT_ANTIGRAVITY_MODELS)
-                    for m in models:
-                        if m not in merged:
-                            merged.append(m)
-                    models = tuple(merged)
             else:
                 models = DEFAULT_ANTIGRAVITY_MODELS
                 self._model_source = "fallback"
@@ -491,6 +539,12 @@ class AntigravityBackend:
         for item in available:
             norm_item = item.lower().replace(" ", "-").replace("_", "-")
             if norm_item in (norm_req, norm_cand):
+                return item
+        for item in available:
+            norm_item = item.lower().replace(" ", "-").replace("_", "-")
+            if norm_item.startswith(norm_cand) or norm_cand.startswith(norm_item):
+                return item
+            if norm_item.startswith(norm_req) or norm_req.startswith(norm_item):
                 return item
         raise UnknownModel(f"unknown model: {requested or candidate}")
 

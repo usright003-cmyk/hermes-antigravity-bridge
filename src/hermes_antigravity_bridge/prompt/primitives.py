@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import mimetypes
+import os
 import re
 import time
 from collections.abc import Sequence
@@ -156,6 +157,17 @@ def _is_safe_media_path(cand: Path) -> bool:
     return False
 
 
+def _normalize_posix_path_str(path_str: str) -> str:
+    if path_str.startswith("//") and (
+        os.name != "nt"
+        or re.match(
+            r"^//(home|etc|var|usr|bin|tmp|opt|root|srv|proc|sys|media|mnt|dev)/", path_str
+        )
+    ):
+        return re.sub(r"^/+", "/", path_str)
+    return path_str
+
+
 def _process_media_item(item: dict[str, Any]) -> str:
     itype = str(item.get("type") or "").strip().lower()
     url_val = ""
@@ -230,24 +242,58 @@ def _process_media_item(item: dict[str, Any]) -> str:
     if url_val.startswith("file://"):
         parsed = urlparse(url_val)
         clean_path = unquote(parsed.path)
+        if re.match(r"^[a-zA-Z]:$", parsed.netloc):
+            clean_path = f"{parsed.netloc}{clean_path}"
+        elif parsed.netloc and parsed.netloc != "localhost":
+            if os.name == "nt":
+                clean_path = f"//{parsed.netloc}{clean_path}"
+            else:
+                clean_path = f"/{parsed.netloc}{clean_path}"
+        if clean_path.startswith("//") and (
+            os.name != "nt"
+            or clean_path.startswith("///")
+            or re.match(r"^//[a-zA-Z]:", clean_path)
+            or re.match(
+                r"^//(home|etc|var|usr|bin|tmp|opt|root|srv|proc|sys|media|mnt|dev)/",
+                clean_path,
+            )
+        ):
+            clean_path = re.sub(r"^/+", "/", clean_path)
         if re.match(r"^/[a-zA-Z]:", clean_path):
             clean_path = clean_path[1:]
         clean_file = Path(clean_path)
+        clean_posix = _normalize_posix_path_str(clean_file.as_posix())
         if _is_safe_media_path(clean_file):
-            return f"[Attached {kind} file: {clean_file.as_posix()} - use view_file to inspect this {kind}]"
-        return f"[Attached {kind} file: {clean_file.as_posix()} (restricted host path; omitted for security)]"
+            return f"[Attached {kind} file: {clean_posix} - use view_file to inspect this {kind}]"
+        return f"[Attached {kind} file: {clean_posix} (restricted host path; omitted for security)]"
 
     try:
-        cand_path = Path(url_val)
+        cand_str = url_val
+        if (
+            cand_str.startswith("//")
+            and not cand_str.startswith(("//?", "//."))
+            and (
+                os.name != "nt"
+                or cand_str.startswith("///")
+                or re.match(r"^//[a-zA-Z]:", cand_str)
+                or re.match(
+                    r"^//(home|etc|var|usr|bin|tmp|opt|root|srv|proc|sys|media|mnt|dev)/",
+                    cand_str,
+                )
+            )
+        ):
+            cand_str = re.sub(r"^/+", "/", cand_str)
+        cand_path = Path(cand_str)
         if (
             cand_path.is_file()
             or cand_path.is_absolute()
-            or url_val.startswith(("/", "\\", "./", "../"))
-            or bool(re.match(r"^[a-zA-Z]:[/\\]", url_val))
+            or cand_str.startswith(("/", "\\", "./", "../"))
+            or bool(re.match(r"^[a-zA-Z]:[/\\]", cand_str))
         ):
+            cand_posix = _normalize_posix_path_str(cand_path.as_posix())
             if _is_safe_media_path(cand_path):
-                return f"[Attached {kind} file: {cand_path.as_posix()} - use view_file to inspect this {kind}]"
-            return f"[Attached {kind} file: {cand_path.as_posix()} (restricted host path; omitted for security)]"
+                return f"[Attached {kind} file: {cand_posix} - use view_file to inspect this {kind}]"
+            return f"[Attached {kind} file: {cand_posix} (restricted host path; omitted for security)]"
     except Exception:  # noqa: BLE001, S110
         pass
 

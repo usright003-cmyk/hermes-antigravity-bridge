@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 from hermes_antigravity_bridge.backends.antigravity import (
     DEFAULT_ANTIGRAVITY_MODELS,
     AntigravityBackend,
+    parse_model_ids,
 )
 from hermes_antigravity_bridge.config import AntigravityConfig
 from hermes_antigravity_bridge.errors import (
@@ -580,6 +581,79 @@ class AntigravityBackendTests(unittest.TestCase):
             if os.name == "nt":
                 self.assertIn("USERPROFILE", env)
                 self.assertEqual(env["USERPROFILE"], str(backend.config.home))
+
+    def test_parse_model_ids_robustness(self):
+        # 1. Standard tab-delimited
+        out_tab = "gemini-3.8-flash-high\tGemini 3.8 Flash (High)\nclaude-sonnet-4-6\tClaude Sonnet 4.6"
+        self.assertEqual(parse_model_ids(out_tab), ("gemini-3.8-flash-high", "claude-sonnet-4-6"))
+
+        # 2. ANSI colored output with spinner/fetching prefix
+        out_ansi = "\x1b[2KFetching available models...\n\x1b[32mgemini-3.8-flash-high\x1b[0m\tGemini\n\x1b[1mgpt-oss-120b\x1b[0m\tGPT"
+        self.assertEqual(parse_model_ids(out_ansi), ("gemini-3.8-flash-high", "gpt-oss-120b"))
+
+        # 3. Multiple space separated columns and table headers
+        out_table = (
+            "Available models:\n"
+            "Model ID                 Description\n"
+            "------------------------------------\n"
+            "gemini-3.1-pro-high      Gemini Pro High\n"
+            "claude-opus-4-6-thinking Claude Opus Thinking\n"
+        )
+        self.assertEqual(parse_model_ids(out_table), ("gemini-3.1-pro-high", "claude-opus-4-6-thinking"))
+
+    def test_base_environment_strips_xdg_vars(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = self.make_backend(Path(tmp))
+            with patch.dict(os.environ, {
+                "XDG_CONFIG_HOME": "/home/user/.config",
+                "XDG_CACHE_HOME": "/home/user/.cache",
+                "XDG_DATA_HOME": "/home/user/.local/share",
+                "XDG_STATE_HOME": "/home/user/.local/state",
+            }):
+                env = backend._base_environment()
+                for var in ("XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"):
+                    self.assertNotIn(var, env)
+
+    def test_list_models_falls_back_to_stderr(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = self.make_backend(Path(tmp))
+            fake_proc = MagicMock()
+            fake_proc.returncode = 0
+            fake_proc.stdout = ""
+            fake_proc.stderr = "gemini-3.8-flash-high\tGemini 3.8 Flash (High)\n"
+            with patch("hermes_antigravity_bridge.backends.antigravity.subprocess.run", return_value=fake_proc):
+                models = backend.list_models(force_refresh=True)
+                self.assertIn("gemini-3.8-flash-high", models)
+                self.assertEqual(backend.model_source, "discovered")
+
+    def test_discovery_pure_models_without_fallback_pollution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = self.make_backend(Path(tmp))
+            fake_proc = MagicMock()
+            fake_proc.returncode = 0
+            fake_proc.stdout = "gemini-3.8-flash-high\tGemini 3.8 Flash (High)\nclaude-opus-4-6-thinking\tClaude Opus Thinking\n"
+            fake_proc.stderr = ""
+            with patch("hermes_antigravity_bridge.backends.antigravity.subprocess.run", return_value=fake_proc):
+                models = backend.list_models(force_refresh=True)
+                self.assertEqual(models, ("gemini-3.8-flash-high", "claude-opus-4-6-thinking"))
+                self.assertEqual(backend.model_source, "discovered")
+                # Fallback models like unqualified "gemini-3.8-flash" must NOT be in models
+                self.assertNotIn("gemini-3.8-flash", models)
+                # But resolve_model still resolves aliases to available models
+                self.assertEqual(backend.resolve_model("claude-opus-4-6"), "claude-opus-4-6-thinking")
+                self.assertEqual(backend.resolve_model("gemini-3.8-flash"), "gemini-3.8-flash-high")
+
+    def test_parse_model_ids_skips_headers_and_status(self):
+        noisy_output = (
+            "Available models:\n"
+            "Logged in as user@example.com\n"
+            "Using project: demo-proj\n"
+            "Model ID                 Description\n"
+            "------------------------------------\n"
+            "gemini-3.8-flash-high    Gemini High\n"
+            "Total: 1 models\n"
+        )
+        self.assertEqual(parse_model_ids(noisy_output), ("gemini-3.8-flash-high",))
 
 
 if __name__ == "__main__":

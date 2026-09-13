@@ -142,6 +142,47 @@ class PromptPolicyTests(unittest.TestCase):
         self.assertNotIn("use view_file to inspect this file", prompt)
         self.assertIn("restricted host path; omitted for security", prompt)
 
+    def test_multimodal_file_uri_normalization(self):
+        from pathlib import Path
+        media_path = (Path.home() / ".gemini" / "antigravity-cli" / "media" / "test.png").as_posix()
+        cases = [
+            f"file:///{media_path.lstrip('/')}",
+            f"file:////{media_path.lstrip('/')}",
+            f"file://localhost/{media_path.lstrip('/')}",
+        ]
+        for uri in cases:
+            prompt = self.builder.build([
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": uri}},
+                    ],
+                }
+            ])
+            self.assertIn(f"[Attached image file: {media_path} - use view_file to inspect this image]", prompt)
+            self.assertNotIn("//home/", prompt)
+            self.assertNotIn("//C:/", prompt)
+
+    def test_multimodal_posix_path_uri_normalization(self):
+        from unittest.mock import patch
+
+        from hermes_antigravity_bridge.prompt.primitives import _process_media_item
+
+        posix_target = "/home/azureuser/.gemini/antigravity-cli/media/clip.mp4"
+        posix_uris = [
+            f"file://{posix_target.lstrip('/')}",     # file://home/... (2 slashes, netloc='home')
+            f"file://{posix_target}",                 # file:///home/... (3 slashes, path='/home/...')
+            f"file:///{posix_target}",                # file:////home/... (4 slashes, path='//home/...')
+            f"file:////{posix_target}",               # file://///home/... (5 slashes, path='///home/...')
+            f"file://localhost{posix_target}",        # file://localhost/home/...
+            f"//{posix_target.lstrip('/')}",          # //home/... raw path
+        ]
+        with patch("hermes_antigravity_bridge.prompt.primitives._is_safe_media_path", return_value=True):
+            for uri in posix_uris:
+                tag = _process_media_item({"type": "video_url", "video_url": {"url": uri}})
+                self.assertIn(f"[Attached video file: {posix_target} - use view_file to inspect this video]", tag)
+                self.assertNotIn("//home/", tag)
+
 
 if __name__ == "__main__":
     unittest.main()

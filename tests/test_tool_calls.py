@@ -177,6 +177,39 @@ class ToolCallAdapterTests(unittest.TestCase):
         self.assertEqual(result.tool_calls[0]["function"]["name"], "save_data")
         self.assertIn("Middle text", result.text)
 
+    def test_tool_call_tag_inside_json_string_literal_does_not_truncate_or_split(self):
+        text = (
+            'I will explain how tool calls work:\n'
+            '<tool_call>\n'
+            '{"name": "write_code", "arguments": {"code": "def run():\\n    return \\"<tool_call>demo</tool_call>\\""}}\n'
+            '</tool_call>\n'
+            'Let me know if you have questions.'
+        )
+        result = parse_tool_calls(text, allowed_tool_names={"write_code"})
+        self.assertEqual(len(result.tool_calls), 1)
+        self.assertEqual(result.tool_calls[0]["function"]["name"], "write_code")
+        args = json.loads(result.tool_calls[0]["function"]["arguments"])
+        self.assertIn("<tool_call>demo</tool_call>", args["code"])
+        self.assertIn("I will explain how tool calls work:", result.text)
+        self.assertIn("Let me know if you have questions.", result.text)
+
+    def test_multiple_tool_calls_with_nested_tool_call_strings(self):
+        text = (
+            '<tool_call>\n'
+            '{"name": "search", "arguments": {"query": "how to format <tool_call> tags"}}\n'
+            '</tool_call>\n'
+            'some text\n'
+            '<tool_call>\n'
+            '{"name": "browse", "arguments": {"url": "https://example.com"}}\n'
+            '</tool_call>'
+        )
+        result = parse_tool_calls(text, allowed_tool_names={"search", "browse"})
+        self.assertEqual(len(result.tool_calls), 2)
+        self.assertEqual(result.tool_calls[0]["function"]["name"], "search")
+        self.assertEqual(result.tool_calls[1]["function"]["name"], "browse")
+        args0 = json.loads(result.tool_calls[0]["function"]["arguments"])
+        self.assertEqual(args0["query"], "how to format <tool_call> tags")
+
 
 if __name__ == "__main__":
     unittest.main()

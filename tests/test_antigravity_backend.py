@@ -102,6 +102,7 @@ class AntigravityBackendTests(unittest.TestCase):
                 self.assertEqual(backend.resolve_model("Claude Opus 4.6 (Thinking)"), "claude-opus-4-6")
                 self.assertEqual(backend.resolve_model("GPT-OSS 120B (Medium)"), "gpt-oss-120b")
                 self.assertEqual(backend.resolve_model("gpt-oss-120b"), "gpt-oss-120b")
+                self.assertEqual(backend.resolve_model("gpt-4"), "gpt-oss-120b")
 
     def test_generate_uses_ephemeral_empty_working_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -191,6 +192,110 @@ class AntigravityBackendTests(unittest.TestCase):
             backend = self.make_backend(Path(tmp) / "runtime")
             with self.assertRaisesRegex(ToolIsolationError, "artifactReviewPolicy"):
                 backend.verify_tool_isolation_settings(settings)
+
+    def test_accepts_agy_minimal_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Path(tmp) / "settings.json"
+            settings.write_text(json.dumps({
+                "toolPermission": "strict",
+            }), encoding="utf-8")
+            backend = self.make_backend(Path(tmp) / "runtime")
+            # Should not raise
+            backend.verify_tool_isolation_settings(settings)
+
+    def test_accepts_omitted_or_none_artifact_review_policy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Path(tmp) / "settings.json"
+            settings.write_text(json.dumps({
+                "toolPermission": "strict",
+                "artifactReviewPolicy": None,
+            }), encoding="utf-8")
+            backend = self.make_backend(Path(tmp) / "runtime")
+            backend.verify_tool_isolation_settings(settings)
+
+    def test_accepts_valid_artifact_review_policies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = self.make_backend(Path(tmp) / "runtime")
+            for valid_policy in ("asks-for-review", "agent-decides"):
+                settings = Path(tmp) / f"settings_{valid_policy}.json"
+                settings.write_text(json.dumps({
+                    "toolPermission": "strict",
+                    "artifactReviewPolicy": valid_policy,
+                }), encoding="utf-8")
+                backend.verify_tool_isolation_settings(settings)
+
+    def test_rejects_agy_minimal_settings_with_allow_rules(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Path(tmp) / "settings.json"
+            settings.write_text(json.dumps({
+                "toolPermission": "strict",
+                "permissions": {"allow": ["read_file(*)"]},
+            }), encoding="utf-8")
+            backend = self.make_backend(Path(tmp) / "runtime")
+            with self.assertRaises(ToolIsolationError):
+                backend.verify_tool_isolation_settings(settings)
+
+    def test_rejects_agy_minimal_settings_with_trusted_workspaces(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Path(tmp) / "settings.json"
+            settings.write_text(json.dumps({
+                "toolPermission": "strict",
+                "trustedWorkspaces": [str(Path(tmp))],
+            }), encoding="utf-8")
+            backend = self.make_backend(Path(tmp) / "runtime")
+            with self.assertRaises(ToolIsolationError):
+                backend.verify_tool_isolation_settings(settings)
+
+    def test_rejects_non_dict_settings_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Path(tmp) / "settings.json"
+            settings.write_text("[]", encoding="utf-8")
+            backend = self.make_backend(Path(tmp) / "runtime")
+            with self.assertRaises(ToolIsolationError):
+                backend.verify_tool_isolation_settings(settings)
+
+    def test_rejects_permissions_list_with_rules(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Path(tmp) / "settings.json"
+            settings.write_text(json.dumps({
+                "toolPermission": "strict",
+                "permissions": ["read_file(*)"],
+            }), encoding="utf-8")
+            backend = self.make_backend(Path(tmp) / "runtime")
+            with self.assertRaises(ToolIsolationError):
+                backend.verify_tool_isolation_settings(settings)
+
+    def test_rejects_permissions_non_dict_primitive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Path(tmp) / "settings.json"
+            settings.write_text(json.dumps({
+                "toolPermission": "strict",
+                "permissions": "allow-all",
+            }), encoding="utf-8")
+            backend = self.make_backend(Path(tmp) / "runtime")
+            with self.assertRaises(ToolIsolationError):
+                backend.verify_tool_isolation_settings(settings)
+
+    def test_accepts_permissions_empty_list_or_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = self.make_backend(Path(tmp) / "runtime")
+            for perms in ([], None, {"allow": None}, {"allow": []}):
+                settings = Path(tmp) / "settings.json"
+                settings.write_text(json.dumps({
+                    "toolPermission": "strict",
+                    "permissions": perms,
+                }), encoding="utf-8")
+                backend.verify_tool_isolation_settings(settings)
+
+    def test_accepts_trusted_workspaces_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Path(tmp) / "settings.json"
+            settings.write_text(json.dumps({
+                "toolPermission": "strict",
+                "trustedWorkspaces": None,
+            }), encoding="utf-8")
+            backend = self.make_backend(Path(tmp) / "runtime")
+            backend.verify_tool_isolation_settings(settings)
 
     def test_wrapper_prepends_to_command(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -446,6 +551,35 @@ class AntigravityBackendTests(unittest.TestCase):
                 # Close generator early
                 gen.close()
                 mock_terminate.assert_called()
+
+    def test_explicit_effort_takes_precedence_over_model_suffix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = self.make_backend(Path(tmp))
+            # Model ends with -medium, but explicit effort is "high"
+            cmd_high = backend.build_command("gemini-3.8-flash-medium", effort="high")
+            self.assertIn("--effort", cmd_high)
+            self.assertEqual(cmd_high[cmd_high.index("--effort") + 1], "high")
+            self.assertEqual(cmd_high[cmd_high.index("--model") + 1], "gemini-3.8-flash")
+
+            # Model ends with -high, but explicit effort is "low"
+            cmd_low = backend.build_command("gemini-3.8-flash-high", effort="low")
+            self.assertIn("--effort", cmd_low)
+            self.assertEqual(cmd_low[cmd_low.index("--effort") + 1], "low")
+            self.assertEqual(cmd_low[cmd_low.index("--model") + 1], "gemini-3.8-flash")
+
+            # Model ends with -medium, no effort provided -> defaults to medium
+            cmd_default = backend.build_command("gemini-3.8-flash-medium")
+            self.assertIn("--effort", cmd_default)
+            self.assertEqual(cmd_default[cmd_default.index("--effort") + 1], "medium")
+
+    def test_windows_userprofile_environment_isolation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = self.make_backend(Path(tmp))
+            env = backend._base_environment()
+            self.assertEqual(env["HOME"], str(backend.config.home))
+            if os.name == "nt":
+                self.assertIn("USERPROFILE", env)
+                self.assertEqual(env["USERPROFILE"], str(backend.config.home))
 
 
 if __name__ == "__main__":

@@ -585,7 +585,9 @@ class HTTPContractTests(unittest.TestCase):
                 self.assertEqual(resp.status, 200)
                 data = json.loads(resp.read().decode("utf-8"))
                 self.assertIn("data", data)
-                self.assertTrue(data["data"][0]["url"].startswith("file:///"))
+                self.assertTrue(data["data"][0]["url"].startswith("http://"))
+                self.assertIn("/v1/media/", data["data"][0]["url"])
+                self.assertNotIn(token, data["data"][0]["url"])
 
             # 2. b64_json response format
             req = urllib.request.Request(

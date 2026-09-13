@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import hmac
 import ipaddress
 import json
 import logging
 import mimetypes
+import re
 import socket
 import threading
 import time
@@ -41,6 +43,39 @@ def _is_loopback_ip(ip: str) -> bool:
         return ipaddress.ip_address(ip).is_loopback
     except ValueError:
         return False
+
+
+def _get_lan_ip() -> str:
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except OSError:
+        return "127.0.0.1"
+
+
+def _store_media_file(src_path: Path, media_dir: Path) -> str | None:
+    """Safely copy src_path into media_dir with unique content-addressed naming.
+
+    Returns the clean basename in media_dir, or None on read failure.
+    """
+    try:
+        data = src_path.read_bytes()
+    except OSError:
+        return None
+    content_hash = hashlib.sha256(data).hexdigest()[:12]
+    clean_stem = re.sub(r"[^A-Za-z0-9_-]", "_", src_path.stem)[:32]
+    suffix = src_path.suffix.lower()
+    unique_name = f"{clean_stem}_{content_hash}{suffix}"
+    dest = media_dir / unique_name
+    if not dest.exists():
+        try:
+            dest.write_bytes(data)
+        except OSError:
+            pass
+    return unique_name
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -506,6 +541,54 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         self._error(401, "unauthorized", "auth_error")
         return False
 
+    def _safe_media_base_url(self) -> str:
+        cfg = self.bridge_server.bridge_config.server
+        configured_host = cfg.host
+        port = cfg.port
+
+        fallback_ip = configured_host
+        if fallback_ip in {"0.0.0.0", "::", ""}:
+            client_ip = (
+                self.client_address[0]
+                if isinstance(self.client_address, tuple) and self.client_address
+                else ""
+            )
+            if _is_loopback_ip(client_ip):
+                fallback_ip = "127.0.0.1"
+            else:
+                fallback_ip = _get_lan_ip()
+
+        host_hdr = (self.headers.get("Host") or "").strip()
+        target_host = f"{fallback_ip}:{port}"
+        if host_hdr:
+            candidate_host, _, candidate_port = host_hdr.partition(":")
+            candidate_host = candidate_host.strip("[]")
+            port_valid = True
+            if candidate_port:
+                port_valid = candidate_port.isdigit() and 1 <= int(candidate_port) <= 65535
+
+            is_safe = False
+            if port_valid:
+                if (
+                    candidate_host in {"127.0.0.1", "localhost", "::1"}
+                    or candidate_host == fallback_ip
+                    or candidate_host == configured_host
+                ):
+                    is_safe = True
+                else:
+                    try:
+                        ip_obj = ipaddress.ip_address(candidate_host)
+                        if ip_obj.is_private or ip_obj.is_loopback:
+                            is_safe = True
+                    except ValueError:
+                        pass
+
+            if is_safe:
+                p = candidate_port if candidate_port else str(port)
+                target_host = f"{candidate_host}:{p}"
+
+        return f"http://{target_host}"
+
     def do_GET(self) -> None:
         path = urlsplit(self.path).path
         client_ip = (
@@ -670,29 +753,35 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         if path.startswith(("/v1/media/", "/media/")):
             prefix = "/v1/media/" if path.startswith("/v1/media/") else "/media/"
             rest = path[len(prefix) :]
-            parts = rest.split("/", 1)
-            if len(parts) != 2:
-                self._error(404, "not found", "not_found_error")
-                return
-            url_token, raw_filename = parts
-            expected_token = self.bridge_server.bridge_config.server.token
-            is_valid_token = bool(
-                expected_token
-                and hmac.compare_digest(url_token.encode("utf-8"), expected_token.encode("utf-8"))
-            )
-            if not is_valid_token and not self._authorized(allow_query_token=True):
-                self._error(401, "unauthorized", "auth_error")
+            parts = [p for p in rest.split("/") if p]
+            if len(parts) == 1:
+                # Direct media access without token: /v1/media/<filename>
+                raw_filename = parts[0]
+            elif len(parts) == 2:
+                # Legacy URL with token: /v1/media/<token>/<filename>
+                url_token, raw_filename = parts
+                expected_token = self.bridge_server.bridge_config.server.token
+                is_valid_token = bool(
+                    expected_token
+                    and hmac.compare_digest(url_token.encode("utf-8"), expected_token.encode("utf-8"))
+                )
+                if not is_valid_token and not self._authorized(allow_query_token=True):
+                    self._error(401, "unauthorized", "auth_error")
+                    return
+            else:
+                self._error(400, "invalid filename", "invalid_request_error")
                 return
 
             filename = unquote(raw_filename).strip()
             clean_name = Path(filename).name
             if (
                 not clean_name
+                or clean_name != filename
                 or clean_name in {".", ".."}
                 or "/" in filename
                 or "\\" in filename
                 or ".." in filename
-                or any(ch in clean_name for ch in "*?[]")
+                or any(ch in clean_name for ch in "*?[]:\x00")
             ):
                 self._error(400, "invalid filename", "invalid_request_error")
                 return
@@ -929,14 +1018,9 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                     self.wfile.flush()
                 elif itype == "finish":
                     if pending_media_paths and not has_emitted_media_url:
-                        token = self.bridge_server.bridge_config.server.token
-                        host = self.bridge_server.bridge_config.server.host
-                        if host in {"0.0.0.0", "::"}:
-                            host = "127.0.0.1"
-                        fallback_host = f"{host}:{self.bridge_server.bridge_config.server.port}"
-                        host_hdr = self.headers.get("Host") or fallback_host
                         media_dir = (Path.home() / ".gemini" / "antigravity-cli" / "media").resolve()
                         media_dir.mkdir(parents=True, exist_ok=True)
+                        safe_base = self._safe_media_base_url()
                         for m_str in pending_media_paths:
                             m_path = Path(m_str)
                             if (
@@ -944,28 +1028,24 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                                 and m_path.suffix.lower() in _ALLOWED_MEDIA_EXTS
                                 and _is_safe_media_path(m_path)
                             ):
-                                dest = media_dir / m_path.name
-                                if not dest.exists() and dest != m_path.resolve():
-                                    try:
-                                        dest.write_bytes(m_path.read_bytes())
-                                    except OSError:
-                                        pass
-                                media_url = f"http://{host_hdr}/v1/media/{token}/{m_path.name}"
-                                url_chunk = {
-                                    "id": stream_id,
-                                    "object": "chat.completion.chunk",
-                                    "created": now,
-                                    "model": item.get("requested_model", "") or requested_model,
-                                    "choices": [
-                                        {
-                                            "index": 0,
-                                            "delta": {"content": f"\nMEDIA_URL:{media_url}"},
-                                            "finish_reason": None,
-                                        }
-                                    ],
-                                }
-                                self.wfile.write(b"data: " + _json_bytes(url_chunk) + b"\n\n")
-                                self.wfile.flush()
+                                unique_name = _store_media_file(m_path, media_dir)
+                                if unique_name:
+                                    media_url = f"{safe_base}/v1/media/{unique_name}"
+                                    url_chunk = {
+                                        "id": stream_id,
+                                        "object": "chat.completion.chunk",
+                                        "created": now,
+                                        "model": item.get("requested_model", "") or requested_model,
+                                        "choices": [
+                                            {
+                                                "index": 0,
+                                                "delta": {"content": f"\nMEDIA_URL:{media_url}"},
+                                                "finish_reason": None,
+                                            }
+                                        ],
+                                    }
+                                    self.wfile.write(b"data: " + _json_bytes(url_chunk) + b"\n\n")
+                                    self.wfile.flush()
                         has_emitted_media_url = True
                     chunk = {
                         "id": stream_id,
@@ -1079,14 +1159,9 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
     def _completion_response(self, result: Any) -> dict[str, Any]:
         content_text = result.text if result.text else None
         if content_text and "MEDIA:" in content_text and "MEDIA_URL:" not in content_text:
-            token = self.bridge_server.bridge_config.server.token
-            host = self.bridge_server.bridge_config.server.host
-            if host in {"0.0.0.0", "::"}:
-                host = "127.0.0.1"
-            fallback_host = f"{host}:{self.bridge_server.bridge_config.server.port}"
-            host_hdr = self.headers.get("Host") or fallback_host
             media_dir = (Path.home() / ".gemini" / "antigravity-cli" / "media").resolve()
             media_dir.mkdir(parents=True, exist_ok=True)
+            safe_base = self._safe_media_base_url()
             for line in content_text.splitlines():
                 sline = line.strip()
                 if sline.startswith("MEDIA:"):
@@ -1097,14 +1172,10 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                         and cand_path.suffix.lower() in _ALLOWED_MEDIA_EXTS
                         and _is_safe_media_path(cand_path)
                     ):
-                        dest = media_dir / cand_path.name
-                        if not dest.exists() and dest != cand_path.resolve():
-                            try:
-                                dest.write_bytes(cand_path.read_bytes())
-                            except OSError:
-                                pass
-                        media_url = f"http://{host_hdr}/v1/media/{token}/{cand_path.name}"
-                        content_text = f"{content_text}\nMEDIA_URL:{media_url}"
+                        unique_name = _store_media_file(cand_path, media_dir)
+                        if unique_name:
+                            media_url = f"{safe_base}/v1/media/{unique_name}"
+                            content_text = f"{content_text}\nMEDIA_URL:{media_url}"
 
         message: dict[str, Any] = {
             "role": "assistant",
@@ -1232,23 +1303,16 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         # Ensure file is available in designated media directory for the /v1/media proxy route
         media_dir = (Path.home() / ".gemini" / "antigravity-cli" / "media").resolve()
         media_dir.mkdir(parents=True, exist_ok=True)
-        token = self.bridge_server.bridge_config.server.token
+        unique_name: str | None = None
         if (
             img_path.suffix.lower() in _ALLOWED_MEDIA_EXTS
             and _is_safe_media_path(img_path)
         ):
-            dest_file = media_dir / img_path.name
-            if not dest_file.exists() and dest_file != img_path.resolve():
-                try:
-                    dest_file.write_bytes(img_path.read_bytes())
-                except OSError:
-                    pass
-        host = self.bridge_server.bridge_config.server.host
-        if host in {"0.0.0.0", "::"}:
-            host = "127.0.0.1"
-        fallback_host = f"{host}:{self.bridge_server.bridge_config.server.port}"
-        host_hdr = self.headers.get("Host") or fallback_host
-        proxy_url = f"http://{host_hdr}/v1/media/{token}/{img_path.name}"
+            unique_name = _store_media_file(img_path, media_dir)
+
+        served_filename = unique_name or img_path.name
+        safe_base = self._safe_media_base_url()
+        proxy_url = f"{safe_base}/v1/media/{served_filename}"
 
         now = int(time.time())
         if response_format == "b64_json":
@@ -1259,7 +1323,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                 self._error(500, f"failed to read generated image: {exc}", "internal_error")
                 return
         else:
-            data_item = {"url": img_path.as_uri(), "revised_prompt": prompt, "proxy_url": proxy_url}
+            data_item = {"url": proxy_url, "revised_prompt": prompt, "proxy_url": proxy_url}
 
         self.bridge_server.metrics.record_request(streaming=False)
         self._send(

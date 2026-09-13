@@ -272,6 +272,8 @@ class AntigravityBackend:
         self._sync_credentials_and_settings()
         env = dict(os.environ)
         env["HOME"] = str(self.config.home)
+        if os.name == "nt":
+            env["USERPROFILE"] = str(self.config.home)
         env.setdefault("NO_COLOR", "1")
         return env
 
@@ -302,14 +304,27 @@ class AntigravityBackend:
             raise ToolIsolationError(
                 "Antigravity strict permission settings are required but unreadable"
             ) from exc
+        if not isinstance(payload, dict):
+            raise ToolIsolationError(
+                "Antigravity strict tool isolation requires toolPermission='strict', "
+                "artifactReviewPolicy in ('asks-for-review', 'agent-decides'), "
+                "no allow rules, and no trusted workspaces"
+            )
         permissions = payload.get("permissions")
-        allow_rules = permissions.get("allow", []) if isinstance(permissions, dict) else []
-        trusted = payload.get("trustedWorkspaces", [])
+        if isinstance(permissions, dict):
+            allow_rules = permissions.get("allow") or []
+        elif isinstance(permissions, list):
+            allow_rules = permissions
+        elif permissions is not None:
+            allow_rules = [permissions]
+        else:
+            allow_rules = []
+        trusted = payload.get("trustedWorkspaces") or []
         policy = payload.get("artifactReviewPolicy")
         valid_policies = {"asks-for-review", "agent-decides"}
         if (
             payload.get("toolPermission") != "strict"
-            or policy not in valid_policies
+            or (policy is not None and policy not in valid_policies)
             or allow_rules
             or trusted
         ):
@@ -354,7 +369,8 @@ class AntigravityBackend:
         if "gemini" in base_model.lower():
             for suffix in ("-high", "-medium", "-low"):
                 if base_model.endswith(suffix):
-                    selected_effort = suffix[1:]
+                    if not effort:
+                        selected_effort = suffix[1:]
                     base_model = base_model[: -len(suffix)]
                     break
 
@@ -462,7 +478,7 @@ class AntigravityBackend:
             "gpt-oss 120b (medium)": "gpt-oss-120b",
             "gpt-oss 120b": "gpt-oss-120b",
             "gpt-oss": "gpt-oss-120b",
-            "gpt-4": "gpt-4o",
+            "gpt-4": "gpt-oss-120b",
         }
         candidate = aliases.get(requested.lower(), requested or self.config.default_model)
         available = self.list_models()

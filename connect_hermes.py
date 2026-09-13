@@ -677,7 +677,11 @@ cd /d "{repo_root}"
 set PYTHONPATH={repo_root}\\src;%PYTHONPATH%
 set AGY_BRIDGE_HOST=0.0.0.0
 set AGY_BRIDGE_ALLOW_REMOTE=true
-"{python_exe}" -m hermes_antigravity_bridge.cli --config "%USERPROFILE%\\.config\\hermes-antigravity-bridge\\config.toml" serve
+if exist "%~dp0.venv\\Scripts\\python.exe" (
+    "%~dp0.venv\\Scripts\\python.exe" -m hermes_antigravity_bridge.cli --config "%USERPROFILE%\\.config\\hermes-antigravity-bridge\\config.toml" serve
+) else (
+    "{python_exe}" -m hermes_antigravity_bridge.cli --config "%USERPROFILE%\\.config\\hermes-antigravity-bridge\\config.toml" serve
+)
 pause
 """
     batch_file.write_text(content, encoding="utf-8")

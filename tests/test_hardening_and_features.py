@@ -100,6 +100,21 @@ class HardeningAndFeaturesTests(unittest.TestCase):
         test_content = b"\x89PNG\r\n\x1a\nTEST_MEDIA_BYTES"
         test_file.write_bytes(test_content)
         try:
+            # Direct tokenless request (/v1/media/<filename>)
+            url_direct = f"{self.base}/v1/media/test_artifact_img.png"
+            req_direct = urllib.request.Request(url_direct)
+            with urllib.request.urlopen(req_direct, timeout=5) as resp:
+                self.assertEqual(resp.status, 200)
+                self.assertEqual(resp.headers.get("Content-Type"), "image/png")
+                self.assertEqual(resp.read(), test_content)
+
+            # Direct tokenless request without /v1 prefix (/media/<filename>)
+            url_direct_no_v1 = f"{self.base}/media/test_artifact_img.png"
+            req_direct_no_v1 = urllib.request.Request(url_direct_no_v1)
+            with urllib.request.urlopen(req_direct_no_v1, timeout=5) as resp:
+                self.assertEqual(resp.status, 200)
+                self.assertEqual(resp.read(), test_content)
+
             # A. Valid request with path token
             url = f"{self.base}/v1/media/{self.token}/test_artifact_img.png"
             req = urllib.request.Request(url)
@@ -180,7 +195,13 @@ class HardeningAndFeaturesTests(unittest.TestCase):
             content = data["choices"][0]["message"]["content"]
             self.assertIn(f"MEDIA:{img.as_posix()}", content)
             self.assertIn("MEDIA_URL:http://", content)
-            self.assertIn(f"/v1/media/{self.token}/gen_img_123.png", content)
+            self.assertIn("/v1/media/gen_img_123", content)
+            self.assertNotIn(self.token, content)
+            media_line = next(l for l in content.splitlines() if l.startswith("MEDIA_URL:"))
+            media_url = media_line.removeprefix("MEDIA_URL:").strip()
+            with urllib.request.urlopen(urllib.request.Request(media_url), timeout=5) as m_resp:
+                self.assertEqual(m_resp.status, 200)
+                self.assertEqual(m_resp.read(), b"TEST_IMAGE_BYTES")
         finally:
             img.unlink(missing_ok=True)
 
@@ -397,10 +418,22 @@ class HardeningAndFeaturesTests(unittest.TestCase):
             urllib.request.urlopen(req_wild, timeout=5)
         self.assertEqual(ctx.exception.code, 400)
 
+        # Direct wildcard request without token
+        req_wild_direct = urllib.request.Request(f"{self.base}/v1/media/*.png")
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(req_wild_direct, timeout=5)
+        self.assertEqual(ctx.exception.code, 400)
+
         # Non-media extension (.json, .pbtxt)
         req_ext = urllib.request.Request(f"{self.base}/v1/media/{self.token}/session.pbtxt")
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             urllib.request.urlopen(req_ext, timeout=5)
+        self.assertEqual(ctx.exception.code, 403)
+
+        # Direct non-media extension without token
+        req_ext_direct = urllib.request.Request(f"{self.base}/v1/media/session.pbtxt")
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(req_ext_direct, timeout=5)
         self.assertEqual(ctx.exception.code, 403)
 
     # 9. Sensitive host path in MEDIA: tag is not mirrored to media proxy
@@ -445,6 +478,96 @@ class HardeningAndFeaturesTests(unittest.TestCase):
         data = json.loads(repaired)
         self.assertEqual(data["code"], "line1\nline2")
         self.assertTrue(data["status"])
+
+    # 12. Host header injection is prevented when constructing media URL
+    def test_host_header_injection_is_prevented(self):
+        media_dir = Path.home() / ".gemini" / "antigravity-cli" / "media"
+        media_dir.mkdir(parents=True, exist_ok=True)
+        img = media_dir / "safe_host_test.png"
+        img.write_bytes(b"SAFE_IMAGE")
+        try:
+            class HostInjectionBackend(SimpleFakeBackend):
+                def generate(self, prompt, model, **kwargs):
+                    return BackendResponse(
+                        response=f"Here is your image:\n\nMEDIA:{img.as_posix()}",
+                        model=model,
+                        usage={"input_tokens": 5, "output_tokens": 5, "total_tokens": 10},
+                    )
+
+            self.server.chat_service.backend = HostInjectionBackend()
+            req = urllib.request.Request(
+                f"{self.base}/v1/chat/completions",
+                data=json.dumps({"model": "model-a", "messages": [{"role": "user", "content": "draw"}]}).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {self.token}",
+                    "Content-Type": "application/json",
+                    "Host": "evil-attacker.com:1337",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            content = data["choices"][0]["message"]["content"]
+            self.assertIn("MEDIA_URL:http://", content)
+            self.assertNotIn("evil-attacker.com", content)
+        finally:
+            img.unlink(missing_ok=True)
+
+    # 13. Stale media cache prevention on filename collision
+    def test_stale_media_cache_prevention(self):
+        media_dir = Path.home() / ".gemini" / "antigravity-cli" / "media"
+        media_dir.mkdir(parents=True, exist_ok=True)
+        img = media_dir / "collision_test.png"
+        try:
+            img.write_bytes(b"IMAGE_V1_BYTES")
+
+            class CollisionBackend(SimpleFakeBackend):
+                def generate(self, prompt, model, **kwargs):
+                    return BackendResponse(
+                        response=f"MEDIA:{img.as_posix()}",
+                        model=model,
+                        usage={},
+                    )
+
+            self.server.chat_service.backend = CollisionBackend()
+
+            # First generation
+            req1 = urllib.request.Request(
+                f"{self.base}/v1/chat/completions",
+                data=json.dumps({"model": "model-a", "messages": [{"role": "user", "content": "draw 1"}]}).encode("utf-8"),
+                headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req1, timeout=5) as resp1:
+                data1 = json.loads(resp1.read().decode("utf-8"))
+            url1 = next(l for l in data1["choices"][0]["message"]["content"].splitlines() if l.startswith("MEDIA_URL:"))
+
+            # Change content of file with same name
+            img.write_bytes(b"IMAGE_V2_DIFFERENT_BYTES")
+
+            # Second generation
+            req2 = urllib.request.Request(
+                f"{self.base}/v1/chat/completions",
+                data=json.dumps({"model": "model-a", "messages": [{"role": "user", "content": "draw 2"}]}).encode("utf-8"),
+                headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req2, timeout=5) as resp2:
+                data2 = json.loads(resp2.read().decode("utf-8"))
+            url2 = next(l for l in data2["choices"][0]["message"]["content"].splitlines() if l.startswith("MEDIA_URL:"))
+
+            # URLs must be distinct because content changed!
+            self.assertNotEqual(url1, url2)
+
+            # Both URLs serve their respective versions
+            clean_url1 = url1.removeprefix("MEDIA_URL:").strip()
+            clean_url2 = url2.removeprefix("MEDIA_URL:").strip()
+            with urllib.request.urlopen(urllib.request.Request(clean_url1), timeout=5) as r1:
+                self.assertEqual(r1.read(), b"IMAGE_V1_BYTES")
+            with urllib.request.urlopen(urllib.request.Request(clean_url2), timeout=5) as r2:
+                self.assertEqual(r2.read(), b"IMAGE_V2_DIFFERENT_BYTES")
+        finally:
+            img.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

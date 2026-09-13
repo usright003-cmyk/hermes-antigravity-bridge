@@ -193,6 +193,45 @@ def _extract_json_object(text: str, start_index: int = 0) -> tuple[dict[str, Any
     return None, start_index
 
 
+def _find_tool_call_boundary(text: str, inner_start: int) -> tuple[int, int, bool]:
+    """Find the end of the tool-call block starting at inner_start.
+
+    Scans forward while tracking JSON string literals so that `<tool_call>`
+    or `</tool_call>` tags inside string literals (e.g. arguments discussing tool
+    calls or emitting XML/code) are not mistaken for block delimiters.
+
+    Returns (block_end, tag_end, is_closed).
+    """
+    in_string = False
+    escape = False
+    n = len(text)
+    i = inner_start
+    while i < n:
+        char = text[i]
+        if escape:
+            escape = False
+            i += 1
+            continue
+        if char == "\\":
+            if in_string:
+                escape = True
+            i += 1
+            continue
+        if char == '"':
+            in_string = not in_string
+            i += 1
+            continue
+        if not in_string and char == "<":
+            m_end = _TOOL_TAG_END_RE.match(text, i)
+            if m_end:
+                return i, m_end.end(), True
+            m_start = _TOOL_TAG_START_RE.match(text, i)
+            if m_start:
+                return i, i, False
+        i += 1
+    return n, n, False
+
+
 def parse_tool_calls(
     text: str,
     *,
@@ -208,7 +247,11 @@ def parse_tool_calls(
     spans: list[tuple[int, int]] = []
     has_tag = False
 
-    for tag_match in _TOOL_TAG_START_RE.finditer(text):
+    pos = 0
+    while pos < len(text):
+        tag_match = _TOOL_TAG_START_RE.search(text, pos)
+        if not tag_match:
+            break
         has_tag = True
         if len(calls) >= _MAX_TOOL_CALLS:
             if mode == "strict":
@@ -219,33 +262,15 @@ def parse_tool_calls(
         tag_start = tag_match.start()
         inner_start = tag_match.end()
 
-        # Check if another opening tag exists after inner_start
-        next_tag_match = _TOOL_TAG_START_RE.search(text, inner_start)
-
-        # Find closing </tool_call>
-        close_match = _TOOL_TAG_END_RE.search(text, inner_start)
-
-        is_closed = (
-            close_match is not None
-            and (next_tag_match is None or close_match.start() < next_tag_match.start())
-        )
-        if is_closed:
-            assert close_match is not None
-            block_content = text[inner_start:close_match.start()]
-            tag_end = close_match.end()
-        elif next_tag_match is not None:
-            # Unclosed tag before next opening tag
-            block_content = text[inner_start:next_tag_match.start()]
-            tag_end = next_tag_match.start()
-        else:
-            # Unclosed tag at end of message
-            block_content = text[inner_start:]
-            tag_end = len(text)
+        block_end, next_pos, is_closed = _find_tool_call_boundary(text, inner_start)
+        block_content = text[inner_start:block_end]
+        tag_end = next_pos
 
         if len(block_content) > _MAX_BLOCK_CHARS:
             if mode == "strict":
                 raise InvalidToolCall("tool-call payload exceeds the configured limit")
             _LOG.warning("Tool call block length (%d) exceeds limit; skipping", len(block_content))
+            pos = max(tag_end, inner_start + 1)
             continue
 
         payload, end_offset = _extract_json_object(block_content, 0)
@@ -256,10 +281,13 @@ def parse_tool_calls(
                 "Malformed tool-call block payload (length=%d, mode=compatible); keeping as assistant text",
                 len(block_content),
             )
+            pos = max(tag_end, inner_start + 1)
             continue
 
         if not is_closed and end_offset > 0:
             tag_end = inner_start + end_offset
+
+        pos = max(tag_end, inner_start + 1)
 
         # Extract function object or flat payload
         fn_value = payload.get("function")

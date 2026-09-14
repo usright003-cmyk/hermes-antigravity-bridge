@@ -6,8 +6,19 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 hab_safe_bridge_path "$HAB_INSTALL_ROOT" || hab_die "unsafe install root: $HAB_INSTALL_ROOT"
 current="$(hab_current_target || true)"
 previous="$(hab_previous_target || true)"
-[[ -n "$current" && -n "$previous" ]] || hab_die "both current and previous releases are required"
-[[ -x "$previous/venv/bin/hermes-antigravity-bridge" ]] || hab_die "previous release is incomplete"
+
+if [[ -z "$current" ]]; then
+    hab_die "no active release found at $HAB_CURRENT_LINK"
+fi
+if [[ -z "$previous" ]]; then
+    hab_die "cannot rollback: no previous release found at $HAB_PREVIOUS_LINK. Rollback requires at least two installed releases (current is the initial release)."
+fi
+if [[ ! -d "$previous" ]]; then
+    hab_die "cannot rollback: previous release directory does not exist: $previous"
+fi
+if [[ ! -x "$previous/venv/bin/hermes-antigravity-bridge" ]]; then
+    hab_die "cannot rollback: previous release binary missing or not executable: $previous/venv/bin/hermes-antigravity-bridge"
+fi
 
 hab_atomic_link "$previous" "$HAB_CURRENT_LINK"
 hab_atomic_link "$current" "$HAB_PREVIOUS_LINK"

@@ -8,16 +8,16 @@ HAB_APP_NAME="hermes-antigravity-bridge"
 HAB_INSTALL_ROOT="${HAB_INSTALL_ROOT:-$HOME/.local/share/$HAB_APP_NAME}"
 HAB_CONFIG_ROOT="${HAB_CONFIG_ROOT:-$HOME/.config/$HAB_APP_NAME}"
 HAB_SYSTEMD_USER_DIR="${HAB_SYSTEMD_USER_DIR:-$HOME/.config/systemd/user}"
-HAB_UNIT_DEST="$HAB_SYSTEMD_USER_DIR/$HAB_APP_NAME.service"
-HAB_CONFIG_FILE="$HAB_CONFIG_ROOT/config.toml"
-HAB_TOKEN_FILE="$HAB_CONFIG_ROOT/bridge.token"
-HAB_CURRENT_LINK="$HAB_INSTALL_ROOT/current"
-HAB_PREVIOUS_LINK="$HAB_INSTALL_ROOT/previous"
-HAB_RELEASES_DIR="$HAB_INSTALL_ROOT/releases"
-HAB_RUNTIME_DIR="$HAB_INSTALL_ROOT/runtime"
+HAB_UNIT_DEST="${HAB_UNIT_DEST:-$HAB_SYSTEMD_USER_DIR/$HAB_APP_NAME.service}"
+HAB_CONFIG_FILE="${HAB_CONFIG_FILE:-$HAB_CONFIG_ROOT/config.toml}"
+HAB_TOKEN_FILE="${HAB_TOKEN_FILE:-$HAB_CONFIG_ROOT/bridge.token}"
+HAB_CURRENT_LINK="${HAB_CURRENT_LINK:-$HAB_INSTALL_ROOT/current}"
+HAB_PREVIOUS_LINK="${HAB_PREVIOUS_LINK:-$HAB_INSTALL_ROOT/previous}"
+HAB_RELEASES_DIR="${HAB_RELEASES_DIR:-$HAB_INSTALL_ROOT/releases}"
+HAB_RUNTIME_DIR="${HAB_RUNTIME_DIR:-$HAB_INSTALL_ROOT/runtime}"
 HAB_AGY_HOME="${HAB_AGY_HOME:-$HOME/.local/state/$HAB_APP_NAME/agy-home}"
-HAB_AGY_SETTINGS="$HAB_AGY_HOME/.gemini/antigravity-cli/settings.json"
-HAB_PYTHON_BIN="${HAB_PYTHON_BIN:-$(command -v python3 || true)}"
+HAB_AGY_SETTINGS="${HAB_AGY_SETTINGS:-$HAB_AGY_HOME/.gemini/antigravity-cli/settings.json}"
+HAB_PYTHON_BIN="${HAB_PYTHON_BIN:-$(command -v python3 || command -v python || true)}"
 hab_detect_uv() {
     if [[ -n "${HAB_UV_BIN:-}" ]]; then
         printf '%s\n' "$HAB_UV_BIN"
@@ -76,20 +76,97 @@ hab_systemctl() {
 }
 
 hab_service_health() {
-    local token host port
+    local token host port restore_xtrace=0
+    [[ -f "$HAB_TOKEN_FILE" ]] || hab_die "token file missing: $HAB_TOKEN_FILE"
+    [[ -r "$HAB_TOKEN_FILE" ]] || hab_die "token file is not readable: $HAB_TOKEN_FILE"
+
+    if [[ "$-" == *x* ]]; then
+        restore_xtrace=1
+        set +x
+    fi
+
     token="$(tr -d '\r\n' < "$HAB_TOKEN_FILE")"
-    read -r host port < <(
-        "$HAB_CURRENT_LINK/venv/bin/python" - "$HAB_CONFIG_FILE" <<'PY'
-from hermes_antigravity_bridge.config import BridgeConfig
+    if [[ -z "$token" ]]; then
+        [[ "$restore_xtrace" == "1" ]] && set -x
+        hab_die "token file is empty: $HAB_TOKEN_FILE"
+    fi
+
+    local py_bin="$HAB_CURRENT_LINK/venv/bin/python"
+    if [[ ! -x "$py_bin" ]]; then
+        py_bin="$HAB_PYTHON_BIN"
+    fi
+    if [[ ! -x "$py_bin" ]]; then
+        unset token
+        [[ "$restore_xtrace" == "1" ]] && set -x
+        hab_die "python interpreter not found for health check"
+    fi
+
+    [[ -f "$HAB_CONFIG_FILE" ]] || {
+        unset token
+        [[ "$restore_xtrace" == "1" ]] && set -x
+        hab_die "config file missing: $HAB_CONFIG_FILE"
+    }
+
+    if ! read -r host port < <(
+        "$py_bin" - "$HAB_CONFIG_FILE" <<'PY'
 import sys
-config = BridgeConfig.load(sys.argv[1])
-print(config.server.host, config.server.port)
+try:
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        import tomli as tomllib
+    with open(sys.argv[1], "rb") as f:
+        data = tomllib.load(f)
+    server = data.get("server", {})
+    print(server.get("host", "127.0.0.1"), server.get("port", 8765))
+except Exception:
+    from hermes_antigravity_bridge.config import BridgeConfig
+    config = BridgeConfig.load(sys.argv[1])
+    print(config.server.host, config.server.port)
 PY
-    )
-    curl -fsS --max-time 10 "http://$host:$port/health" >/dev/null
-    curl -fsS --max-time 35 \
-        -H "Authorization: Bearer $token" \
-        "http://$host:$port/ready" >/dev/null
+    ); then
+        unset token
+        [[ "$restore_xtrace" == "1" ]] && set -x
+        return 1
+    fi
+
+    host="${host//$'\r'/}"
+    port="${port//$'\r'/}"
+
+    if [[ -z "${host:-}" || -z "${port:-}" ]]; then
+        unset token
+        [[ "$restore_xtrace" == "1" ]] && set -x
+        hab_die "failed to resolve bridge host and port from $HAB_CONFIG_FILE"
+    fi
+
+    if [[ "$host" == "0.0.0.0" || "$host" == "::" ]]; then
+        host="127.0.0.1"
+    fi
+
+    local healthy=0
+    for _ in {1..15}; do
+        if curl -fsS --max-time 2 "http://$host:$port/health" >/dev/null 2>&1; then
+            healthy=1
+            break
+        fi
+        sleep 1
+    done
+    if [[ "$healthy" != "1" ]]; then
+        unset token
+        [[ "$restore_xtrace" == "1" ]] && set -x
+        return 1
+    fi
+
+    if ! (printf 'header = "Authorization: Bearer %s"\n' "$token" | \
+        curl -fsS --max-time 35 -K - "http://$host:$port/ready" >/dev/null); then
+        unset token
+        [[ "$restore_xtrace" == "1" ]] && set -x
+        return 1
+    fi
+
+    unset token
+    [[ "$restore_xtrace" == "1" ]] && set -x
+    return 0
 }
 
 hab_render_unit() {

@@ -20,6 +20,8 @@ version="$(PYTHONPATH="$HAB_PROJECT_ROOT/src" "$HAB_PYTHON_BIN" -c 'from hermes_
 release_id="${version}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 release_dir="$HAB_RELEASES_DIR/$release_id"
 old_current="$(hab_current_target || true)"
+old_previous="$(hab_previous_target || true)"
+
 
 umask 077
 mkdir -p "$HAB_RELEASES_DIR" "$HAB_CONFIG_ROOT" "$HAB_RUNTIME_DIR"
@@ -95,6 +97,11 @@ if [[ "$HAB_SKIP_SERVICE" != "1" ]]; then
     if ! hab_systemctl restart "$HAB_APP_NAME.service" || ! hab_service_health; then
         if [[ -n "$old_current" ]]; then
             hab_atomic_link "$old_current" "$HAB_CURRENT_LINK"
+            if [[ -n "$old_previous" ]]; then
+                hab_atomic_link "$old_previous" "$HAB_PREVIOUS_LINK"
+            else
+                rm -f "$HAB_PREVIOUS_LINK"
+            fi
             hab_systemctl restart "$HAB_APP_NAME.service" || true
         else
             rm -f "$HAB_CURRENT_LINK"

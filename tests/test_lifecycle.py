@@ -84,6 +84,18 @@ class LifecycleScriptTests(unittest.TestCase):
             self.assertIn(str(agy_home), unit)
             self.assertNotIn(token.read_text(encoding="utf-8").strip(), unit)
 
+            # Rollback must fail cleanly when only initial release exists (no previous link)
+            failed_rollback = subprocess.run(
+                ["bash", str(ROOT / "scripts/rollback.sh")],
+                cwd=ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(failed_rollback.returncode, 0)
+            self.assertIn("cannot rollback: no previous release found", failed_rollback.stderr)
+
             self.run_script("update.sh", env)
             second = (install_root / "current").resolve()
             self.assertNotEqual(first, second)

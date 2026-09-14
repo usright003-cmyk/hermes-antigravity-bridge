@@ -251,7 +251,7 @@ class TestSafeMediaPath(unittest.TestCase):
 
 
 class TestMediaUrlAndMarkdownInHTTP(unittest.TestCase):
-    """Verify chat completions responses contain BOTH Markdown image link and MEDIA_URL line."""
+    """Verify chat completions responses contain clean MEDIA:<path> without duplicate or URL clutter."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -329,17 +329,12 @@ class TestMediaUrlAndMarkdownInHTTP(unittest.TestCase):
             data = json.loads(resp.read().decode("utf-8"))
 
         content = data["choices"][0]["message"]["content"]
-        # Both Markdown link and MEDIA_URL are present
-        self.assertIn("![Generated Image](http://", content)
-        self.assertIn("MEDIA_URL:http://", content)
-        self.assertIn("/v1/media/flower_123", content)
-
-        # Fetch image via the generated media URL
-        media_line = next(l for l in content.splitlines() if l.startswith("MEDIA_URL:"))
-        media_url = media_line.removeprefix("MEDIA_URL:").strip()
-        with urllib.request.urlopen(urllib.request.Request(media_url), timeout=5) as m_resp:
-            self.assertEqual(m_resp.status, 200)
-            self.assertEqual(m_resp.read(), b"FLOWER_IMAGE_BYTES")
+        self.assertIn(f"MEDIA:{self.media_file.as_posix()}", content)
+        self.assertNotIn("MEDIA_URL:", content)
+        self.assertNotIn("![Generated Image]", content)
+        self.assertNotIn("/v1/media/", content)
+        media_lines = [l for l in content.splitlines() if l.strip().startswith("MEDIA:")]
+        self.assertEqual(len(media_lines), 1)
 
     def test_streaming_chat_completion_emits_markdown_and_media_url(self):
         req = urllib.request.Request(
@@ -362,9 +357,12 @@ class TestMediaUrlAndMarkdownInHTTP(unittest.TestCase):
                     if "content" in delta:
                         accumulated_text += delta["content"]
 
-        self.assertIn("![Generated Image](http://", accumulated_text)
-        self.assertIn("MEDIA_URL:http://", accumulated_text)
-        self.assertIn("/v1/media/flower_123", accumulated_text)
+        self.assertIn(f"MEDIA:{self.media_file.as_posix()}", accumulated_text)
+        self.assertNotIn("MEDIA_URL:", accumulated_text)
+        self.assertNotIn("![Generated Image]", accumulated_text)
+        self.assertNotIn("/v1/media/", accumulated_text)
+        media_lines = [l for l in accumulated_text.splitlines() if l.strip().startswith("MEDIA:")]
+        self.assertEqual(len(media_lines), 1)
 
     def test_streaming_chat_completion_with_quoted_media_path(self):
         class QuotedMediaBackend:
@@ -412,9 +410,138 @@ class TestMediaUrlAndMarkdownInHTTP(unittest.TestCase):
                     if "content" in delta:
                         accumulated_text += delta["content"]
 
-        self.assertIn("![Generated Image](http://", accumulated_text)
-        self.assertIn("MEDIA_URL:http://", accumulated_text)
-        self.assertIn("/v1/media/flower_123", accumulated_text)
+        self.assertIn(f"MEDIA:{self.media_file.as_posix()}", accumulated_text)
+        self.assertNotIn("MEDIA_URL:", accumulated_text)
+        self.assertNotIn("![Generated Image]", accumulated_text)
+        media_lines = [l for l in accumulated_text.splitlines() if l.strip().startswith("MEDIA:")]
+        self.assertEqual(len(media_lines), 1)
+        self.assertEqual(media_lines[0], f"MEDIA:{self.media_file.as_posix()}")
+
+    def test_completion_deduplicates_duplicate_media_tags(self):
+        class DuplicateMediaBackend:
+            def __init__(self, media_path):
+                self.media_path = media_path
+
+            def list_models(self, *, force_refresh=False):
+                return ("gemini-3.8-flash",)
+
+            def resolve_model(self, req):
+                return "gemini-3.8-flash"
+
+            def generate(self, prompt, model, **kwargs):
+                return BackendResponse(
+                    response=f"Here is your flower:\n\nMEDIA:{self.media_path.as_posix()}\n\nMEDIA:{self.media_path.as_posix()}",
+                    model=model,
+                    usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                )
+
+        self.service.backend = DuplicateMediaBackend(self.media_file)
+        req = urllib.request.Request(
+            f"{self.base}/v1/chat/completions",
+            data=json.dumps({"model": "gemini-3.8-flash", "messages": [{"role": "user", "content": "draw duplicate"}]}).encode("utf-8"),
+            headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+
+        content = data["choices"][0]["message"]["content"]
+        media_lines = [l for l in content.splitlines() if l.strip().startswith("MEDIA:")]
+        self.assertEqual(len(media_lines), 1)
+        self.assertEqual(media_lines[0], f"MEDIA:{self.media_file.as_posix()}")
+
+    def test_streaming_completion_deduplicates_streamed_media_tags(self):
+        class MultiChunkMediaBackend:
+            def __init__(self, media_path):
+                self.media_path = media_path
+
+            def list_models(self, *, force_refresh=False):
+                return ("gemini-3.8-flash",)
+
+            def resolve_model(self, req):
+                return "gemini-3.8-flash"
+
+            def generate_stream(self, prompt, model, **kwargs):
+                yield {"type": "delta", "content": f"Photo:\n\nMEDIA:{self.media_path.as_posix()}\n"}
+                yield {"type": "delta", "content": f"\nMEDIA:{self.media_path.as_posix()}\n"}
+                yield {
+                    "type": "result",
+                    "response": BackendResponse(
+                        response=f"Photo:\n\nMEDIA:{self.media_path.as_posix()}",
+                        model=model,
+                        usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                    ),
+                }
+
+        self.service.backend = MultiChunkMediaBackend(self.media_file)
+        req = urllib.request.Request(
+            f"{self.base}/v1/chat/completions",
+            data=json.dumps({"model": "gemini-3.8-flash", "messages": [{"role": "user", "content": "draw multi"}], "stream": True}).encode("utf-8"),
+            headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        accumulated_text = ""
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            for line in resp:
+                decoded = line.decode("utf-8").strip()
+                if decoded.startswith("data: ") and decoded != "data: [DONE]":
+                    chunk = json.loads(decoded.removeprefix("data: "))
+                    delta = chunk["choices"][0].get("delta", {})
+                    if "content" in delta:
+                        accumulated_text += delta["content"]
+
+        media_lines = [l for l in accumulated_text.splitlines() if l.strip().startswith("MEDIA:")]
+        self.assertEqual(len(media_lines), 1)
+        self.assertEqual(media_lines[0], f"MEDIA:{self.media_file.as_posix()}")
+
+    def test_streaming_completion_handles_split_token_media_tags(self):
+        class SplitTokenMediaBackend:
+            def __init__(self, media_path):
+                self.media_path = media_path
+
+            def list_models(self, *, force_refresh=False):
+                return ("gemini-3.8-flash",)
+
+            def resolve_model(self, req):
+                return "gemini-3.8-flash"
+
+            def generate_stream(self, prompt, model, **kwargs):
+                yield {"type": "delta", "content": "Photo:\n\nMED"}
+                yield {"type": "delta", "content": f"IA:{self.media_path.as_posix()}\n"}
+                yield {"type": "delta", "content": "\nMED"}
+                yield {"type": "delta", "content": f"IA:{self.media_path.as_posix()}\n"}
+                yield {
+                    "type": "result",
+                    "response": BackendResponse(
+                        response=f"Photo:\n\nMEDIA:{self.media_path.as_posix()}",
+                        model=model,
+                        usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                    ),
+                }
+
+        self.service.backend = SplitTokenMediaBackend(self.media_file)
+        req = urllib.request.Request(
+            f"{self.base}/v1/chat/completions",
+            data=json.dumps({"model": "gemini-3.8-flash", "messages": [{"role": "user", "content": "draw split"}], "stream": True}).encode("utf-8"),
+            headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        accumulated_text = ""
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            for line in resp:
+                decoded = line.decode("utf-8").strip()
+                if decoded.startswith("data: ") and decoded != "data: [DONE]":
+                    chunk = json.loads(decoded.removeprefix("data: "))
+                    delta = chunk["choices"][0].get("delta", {})
+                    if "content" in delta:
+                        accumulated_text += delta["content"]
+
+        media_lines = [l for l in accumulated_text.splitlines() if l.strip().startswith("MEDIA:")]
+        self.assertEqual(len(media_lines), 1)
+        self.assertEqual(media_lines[0], f"MEDIA:{self.media_file.as_posix()}")
+        self.assertNotIn("MEDIA_URL:", accumulated_text)
+        self.assertNotIn("![Generated Image]", accumulated_text)
+        self.assertEqual(accumulated_text.strip(), f"Photo:\n\nMEDIA:{self.media_file.as_posix()}")
 
     def test_v1_images_generations_endpoint_url_and_b64(self):
         # 1. URL format
@@ -688,6 +815,118 @@ class TestImageGenerationEdgeCasesAndHardening(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
+
+
+class TestMediaDeduplicationAndFiltering(unittest.TestCase):
+    """Deep unit tests for media tag deduplication and stream filtering."""
+
+    def test_stream_media_filter_split_across_tokens(self):
+        from hermes_antigravity_bridge.openai_http import _StreamMediaFilter
+
+        f = _StreamMediaFilter()
+        out = []
+        for c in ["Photo:\n\nMED", "IA:/tmp/cat.png\n", "\nMED", "IA:/tmp/cat.png\n"]:
+            out.extend(f.process_chunk(c))
+        out.extend(f.finish())
+        self.assertEqual("".join(out), "Photo:\n\nMEDIA:/tmp/cat.png\n")
+
+    def test_stream_media_filter_colon_split(self):
+        from hermes_antigravity_bridge.openai_http import _StreamMediaFilter
+
+        f = _StreamMediaFilter()
+        out = []
+        for c in ["Photo:\n\nMEDIA:", "/tmp/cat.png\n", "\nMEDIA:", "/tmp/cat.png\n"]:
+            out.extend(f.process_chunk(c))
+        out.extend(f.finish())
+        self.assertEqual("".join(out), "Photo:\n\nMEDIA:/tmp/cat.png\n")
+
+    def test_stream_media_filter_quoted_path(self):
+        from hermes_antigravity_bridge.openai_http import _StreamMediaFilter
+
+        f = _StreamMediaFilter()
+        out = []
+        for c in ['Photo:\n\nMEDIA:"/tmp/cat.png"\n']:
+            out.extend(f.process_chunk(c))
+        out.extend(f.finish())
+        self.assertEqual("".join(out), "Photo:\n\nMEDIA:/tmp/cat.png\n")
+
+    def test_stream_media_filter_strips_media_url_and_proxy_markdown(self):
+        from hermes_antigravity_bridge.openai_http import _StreamMediaFilter
+
+        f = _StreamMediaFilter()
+        out = []
+        chunks = [
+            "Photo:\n\nMEDIA:/tmp/1.png\n",
+            "MEDIA_URL:http://127.0.0.1:8765/v1/media/1.png\n",
+            "![Generated Image](http://127.0.0.1:8765/v1/media/1.png)\n",
+            "MEDIA:/tmp/1.png\n",
+        ]
+        for c in chunks:
+            out.extend(f.process_chunk(c))
+        out.extend(f.finish())
+        self.assertEqual("".join(out), "Photo:\n\nMEDIA:/tmp/1.png\n")
+
+    def test_stream_media_filter_preserves_normal_words(self):
+        from hermes_antigravity_bridge.openai_http import _StreamMediaFilter
+
+        f = _StreamMediaFilter()
+        out = []
+        for c in ["Model ", "evaluation ", "is done."]:
+            out.extend(f.process_chunk(c))
+        out.extend(f.finish())
+        self.assertEqual("".join(out), "Model evaluation is done.")
+
+    def test_stream_media_filter_unstreamed_chunk_after_media_emitted(self):
+        from hermes_antigravity_bridge.openai_http import _StreamMediaFilter
+
+        f = _StreamMediaFilter()
+        out = []
+        out.extend(f.process_chunk("Photo:\n\nMEDIA:/tmp/1.png\n"))
+        out.extend(f.process_chunk("\n\nMEDIA:/tmp/1.png"))
+        out.extend(f.finish())
+        self.assertEqual("".join(out), "Photo:\n\nMEDIA:/tmp/1.png\n")
+
+    def test_format_single_media_response_in_backend(self):
+        from hermes_antigravity_bridge.backends.antigravity import (
+            _format_single_media_response,
+        )
+
+        # Overwrite duplicate tags with canonical tag
+        raw = "Here is your image:\n\nMEDIA:/old/img1.png\nMEDIA:/old/img2.png"
+        formatted = _format_single_media_response(raw, "MEDIA:/canonical/img.png")
+        self.assertEqual(formatted, "Here is your image:\n\nMEDIA:/canonical/img.png")
+
+        # MEDIA_URL without MEDIA tag is cleaned (Bug 1 regression check)
+        raw_url = "Image generated.\nMEDIA_URL:http://127.0.0.1:8765/v1/media/test.png"
+        cleaned_url = _format_single_media_response(raw_url)
+        self.assertEqual(cleaned_url, "Image generated.")
+
+        # Proxy markdown without MEDIA tag is cleaned
+        raw_md = "Image generated.\n![Generated Image](http://127.0.0.1:8765/v1/media/test.png)"
+        cleaned_md = _format_single_media_response(raw_md)
+        self.assertEqual(cleaned_md, "Image generated.")
+
+    def test_service_media_helpers(self):
+        from hermes_antigravity_bridge.service import (
+            _deduplicate_media_lines,
+            _strip_media_lines,
+        )
+
+        # _strip_media_lines strips MEDIA:, MEDIA_URL:, and localhost markdown (Bug 2 regression check)
+        surrounding = (
+            "Here is the text.\n"
+            "MEDIA:/tmp/img1.png\n"
+            "MEDIA_URL:http://127.0.0.1:8765/v1/media/img1.png\n"
+            "![Generated Image](http://127.0.0.1:8765/v1/media/img1.png)\n"
+            "End of text."
+        )
+        stripped = _strip_media_lines(surrounding)
+        self.assertEqual(stripped, "Here is the text.\nEnd of text.")
+
+        # _deduplicate_media_lines leaves exactly one clean tag at end
+        dup_text = "Intro.\nMEDIA:'/tmp/1.png'\n\nMEDIA:\"/tmp/2.png\""
+        deduped = _deduplicate_media_lines(dup_text)
+        self.assertEqual(deduped, "Intro.\n\nMEDIA:/tmp/2.png")
 
 
 if __name__ == "__main__":

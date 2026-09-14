@@ -56,6 +56,43 @@ _TRANSIENT_MARKERS = (
 )
 
 
+def _format_single_media_response(response: str, media_tag: str | None = None) -> str:
+    """Ensure response has at most one clean MEDIA:<path> line at the end,
+
+    without duplicating existing MEDIA: lines if already present.
+    """
+    if "MEDIA:" not in response and "MEDIA_URL:" not in response and "/v1/media/" not in response and not media_tag:
+        return response
+    lines = response.splitlines()
+    existing_paths: list[str] = []
+    non_media_lines: list[str] = []
+    for line in lines:
+        sline = line.strip()
+        if sline.startswith("MEDIA_URL:"):
+            continue
+        if sline.startswith("![") and "/v1/media/" in sline:
+            continue
+        if sline.startswith("MEDIA:"):
+            cand = sline.removeprefix("MEDIA:").strip().strip("'\"")
+            if cand:
+                existing_paths.append(cand)
+        else:
+            non_media_lines.append(line)
+
+    target_tag = media_tag
+    if not target_tag and existing_paths:
+        target_tag = f"MEDIA:{existing_paths[-1]}"
+
+    if target_tag:
+        clean_cand = target_tag.strip().removeprefix("MEDIA:").strip().strip("'\"")
+        target_tag = f"MEDIA:{clean_cand}"
+
+    cleaned_text = "\n".join(non_media_lines).strip()
+    if target_tag:
+        return f"{cleaned_text}\n\n{target_tag}".strip() if cleaned_text else target_tag
+    return cleaned_text
+
+
 def is_transient_backend_error(exc: Exception) -> bool:
     """Determine whether an upstream error represents a transient network reset."""
     if isinstance(exc, (ToolIsolationError, BackendProtocolError)):
@@ -1227,8 +1264,9 @@ class AntigravityBackend:
                 _LOG.debug("Could not copy image to media directory: %s", exc)
 
             media_tag = f"MEDIA:{latest_img.as_posix()}"
-            if media_tag not in response:
-                response = f"{response}\n\n{media_tag}".strip()
+            response = _format_single_media_response(response, media_tag)
+        elif "MEDIA:" in response or "MEDIA_URL:" in response:
+            response = _format_single_media_response(response)
 
         result["response"] = response
         return result

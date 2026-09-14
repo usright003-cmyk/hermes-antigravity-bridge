@@ -57,6 +57,54 @@ _ALLOWED_ROLES = {"system", "developer", "user", "assistant", "tool"}
 _THOUGHT_RE = re.compile(r"<thought>(.*?)(?:</thought>|$)", re.DOTALL | re.IGNORECASE)
 
 
+def _clean_media_tag(line: str) -> str:
+    path = line.strip().removeprefix("MEDIA:").strip().strip("'\"")
+    return f"MEDIA:{path}"
+
+
+def _strip_media_lines(text: str) -> str:
+    lines: list[str] = []
+    for line in text.splitlines():
+        sline = line.strip()
+        if sline.startswith(("MEDIA:", "MEDIA_URL:")):
+            continue
+        if sline.startswith("![") and "/v1/media/" in sline:
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def _deduplicate_media_lines(text: str) -> str:
+    """Ensure text contains at most one clean MEDIA:<path> line at the end,
+
+    stripping any duplicate MEDIA: lines or unwanted MEDIA_URL: tags.
+    """
+    if "MEDIA:" not in text and "MEDIA_URL:" not in text and "/v1/media/" not in text:
+        return text
+    lines = text.splitlines()
+    media_paths: list[str] = []
+    non_media_lines: list[str] = []
+    for line in lines:
+        sline = line.strip()
+        if sline.startswith("MEDIA_URL:"):
+            continue
+        if sline.startswith("![") and "/v1/media/" in sline:
+            continue
+        if sline.startswith("MEDIA:"):
+            cand = sline.removeprefix("MEDIA:").strip().strip("'\"")
+            if cand:
+                media_paths.append(cand)
+        else:
+            non_media_lines.append(line)
+    if not media_paths:
+        return "\n".join(non_media_lines).strip()
+    clean_tag = f"MEDIA:{media_paths[-1]}"
+    remaining_text = "\n".join(non_media_lines).strip()
+    if remaining_text:
+        return f"{remaining_text}\n\n{clean_tag}"
+    return clean_tag
+
+
 def _extract_json_schema_instruction(response_format: Any) -> str | None:
     """Extract strict JSON schema/object instruction from response_format if requested."""
     if not isinstance(response_format, dict):
@@ -454,16 +502,19 @@ class ChatCompletionService:
                 surrounding_text = re.sub(
                     r"<tool_call(?:\s+[^>]*)?>.*?</tool_call\s*>", "", cleaned_response, flags=re.DOTALL | re.IGNORECASE
                 ).strip()
+                clean_surrounding = _strip_media_lines(surrounding_text)
                 if img_line:
-                    if surrounding_text:
-                        resp_text = f"{surrounding_text}\n\n{img_line}"
+                    clean_img_line = _clean_media_tag(img_line)
+                    if clean_surrounding:
+                        resp_text = f"{clean_surrounding}\n\n{clean_img_line}"
                     else:
-                        resp_text = f"Here is the generated image for: {img_prompt}\n\n{img_line}"
+                        resp_text = f"Here is the generated image for: {img_prompt}\n\n{clean_img_line}"
                 else:
-                    if surrounding_text:
-                        resp_text = f"{surrounding_text}\n\n{img_backend_res.response}"
+                    if clean_surrounding:
+                        resp_text = f"{clean_surrounding}\n\n{img_backend_res.response}".strip()
                     else:
                         resp_text = img_backend_res.response
+                resp_text = _deduplicate_media_lines(resp_text)
                 return ChatCompletionResult(
                     text=resp_text,
                     tool_calls=[],
@@ -483,8 +534,11 @@ class ChatCompletionService:
 
         if not parsed.text and not parsed.tool_calls and not reasoning_content:
             raise InvalidRequest("backend produced neither assistant text nor tool calls")
+        parsed_text = parsed.text
+        if parsed_text and ("MEDIA:" in parsed_text or "MEDIA_URL:" in parsed_text or "/v1/media/" in parsed_text):
+            parsed_text = _deduplicate_media_lines(parsed_text)
         return ChatCompletionResult(
-            text=parsed.text,
+            text=parsed_text,
             tool_calls=parsed.tool_calls,
             usage=normalized_usage,
             requested_model=requested,
@@ -722,19 +776,36 @@ class ChatCompletionService:
                                 surrounding_text = re.sub(
                                     r"<tool_call(?:\s+[^>]*)?>.*?</tool_call\s*>", "", cleaned_raw, flags=re.DOTALL | re.IGNORECASE
                                 ).strip()
-                                if streamed_text:
-                                    unstreamed = f"\n\n{img_line}" if img_line else f"\n\n{img_backend_res.response}"
-                                else:
-                                    if surrounding_text:
-                                        unstreamed = f"{surrounding_text}\n\n{img_line}" if img_line else f"{surrounding_text}\n\n{img_backend_res.response}"
+                                clean_surrounding = _strip_media_lines(surrounding_text)
+                                already_has_media = any(
+                                    l.strip().startswith("MEDIA:") for l in streamed_text.splitlines()
+                                )
+                                if img_line:
+                                    clean_img_line = _clean_media_tag(img_line)
+                                    if streamed_text:
+                                        unstreamed = "" if already_has_media else f"\n\n{clean_img_line}"
                                     else:
-                                        unstreamed = f"Here is the generated image for: {img_prompt}\n\n{img_line}" if img_line else img_backend_res.response
-                                yield {
-                                    "type": "delta",
-                                    "content": unstreamed,
-                                    "requested_model": requested,
-                                    "actual_model": actual_model,
-                                }
+                                        if clean_surrounding:
+                                            unstreamed = f"{clean_surrounding}\n\n{clean_img_line}"
+                                        else:
+                                            unstreamed = f"Here is the generated image for: {img_prompt}\n\n{clean_img_line}"
+                                else:
+                                    if streamed_text:
+                                        unstreamed = "" if already_has_media else f"\n\n{img_backend_res.response}"
+                                    else:
+                                        if clean_surrounding:
+                                            unstreamed = f"{clean_surrounding}\n\n{img_backend_res.response}".strip()
+                                        else:
+                                            unstreamed = img_backend_res.response
+                                if unstreamed:
+                                    unstreamed = _deduplicate_media_lines(unstreamed)
+                                if unstreamed:
+                                    yield {
+                                        "type": "delta",
+                                        "content": unstreamed,
+                                        "requested_model": requested,
+                                        "actual_model": actual_model,
+                                    }
                                 yield {
                                     "type": "finish",
                                     "finish_reason": "stop",
@@ -800,9 +871,11 @@ class ChatCompletionService:
                                 "actual_model": actual_model,
                             }
                         else:
-
                             if parsed.text:
-                                unstreamed = _extract_unstreamed_text(parsed.text, streamed_text)
+                                clean_parsed_text = _deduplicate_media_lines(parsed.text)
+                                unstreamed = _extract_unstreamed_text(clean_parsed_text, streamed_text)
+                                if any(l.strip().startswith("MEDIA:") for l in streamed_text.splitlines()):
+                                    unstreamed = _strip_media_lines(unstreamed)
                                 if unstreamed:
                                     yield {
                                         "type": "delta",
@@ -863,16 +936,19 @@ class ChatCompletionService:
                     surrounding_text = re.sub(
                         r"<tool_call(?:\s+[^>]*)?>.*?</tool_call\s*>", "", cleaned_response, flags=re.DOTALL | re.IGNORECASE
                     ).strip()
+                    clean_surrounding = _strip_media_lines(surrounding_text)
                     if img_line:
-                        if surrounding_text:
-                            resp_text = f"{surrounding_text}\n\n{img_line}"
+                        clean_img_line = _clean_media_tag(img_line)
+                        if clean_surrounding:
+                            resp_text = f"{clean_surrounding}\n\n{clean_img_line}"
                         else:
-                            resp_text = f"Here is the generated image for: {img_prompt}\n\n{img_line}"
+                            resp_text = f"Here is the generated image for: {img_prompt}\n\n{clean_img_line}"
                     else:
-                        if surrounding_text:
-                            resp_text = f"{surrounding_text}\n\n{img_backend_res.response}"
+                        if clean_surrounding:
+                            resp_text = f"{clean_surrounding}\n\n{img_backend_res.response}".strip()
                         else:
                             resp_text = img_backend_res.response
+                        resp_text = _deduplicate_media_lines(resp_text)
                     yield {
                         "type": "delta",
                         "content": resp_text,
@@ -897,9 +973,14 @@ class ChatCompletionService:
             )
             if parsed.tool_calls:
                 if parsed.text:
+                    clean_text = (
+                        _deduplicate_media_lines(parsed.text)
+                        if ("MEDIA:" in parsed.text or "MEDIA_URL:" in parsed.text or "/v1/media/" in parsed.text)
+                        else parsed.text
+                    )
                     yield {
                         "type": "delta",
-                        "content": parsed.text,
+                        "content": clean_text,
                         "requested_model": requested,
                         "actual_model": actual_model,
                     }
@@ -917,10 +998,14 @@ class ChatCompletionService:
                     "actual_model": actual_model,
                 }
             else:
-
+                clean_text = (
+                    _deduplicate_media_lines(parsed.text)
+                    if ("MEDIA:" in parsed.text or "MEDIA_URL:" in parsed.text or "/v1/media/" in parsed.text)
+                    else parsed.text
+                )
                 yield {
                     "type": "delta",
-                    "content": parsed.text,
+                    "content": clean_text,
                     "requested_model": requested,
                     "actual_model": actual_model,
                 }

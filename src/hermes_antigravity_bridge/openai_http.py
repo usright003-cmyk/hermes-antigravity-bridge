@@ -78,6 +78,144 @@ def _store_media_file(src_path: Path, media_dir: Path) -> str | None:
     return unique_name
 
 
+def _deduplicate_media_lines(text: str) -> str:
+    """Ensure text contains at most one clean MEDIA:<path> line at the end,
+
+    stripping any duplicate MEDIA: lines or unwanted MEDIA_URL: tags.
+    """
+    if "MEDIA:" not in text and "MEDIA_URL:" not in text and "/v1/media/" not in text:
+        return text
+    lines = text.splitlines()
+    media_paths: list[str] = []
+    non_media_lines: list[str] = []
+    for line in lines:
+        sline = line.strip()
+        if sline.startswith("MEDIA_URL:"):
+            continue
+        if sline.startswith("![") and "/v1/media/" in sline:
+            continue
+        if sline.startswith("MEDIA:"):
+            cand = sline.removeprefix("MEDIA:").strip().strip("'\"")
+            if cand:
+                media_paths.append(cand)
+        else:
+            non_media_lines.append(line)
+    if not media_paths:
+        return "\n".join(non_media_lines).strip()
+    clean_tag = f"MEDIA:{media_paths[-1]}"
+    remaining_text = "\n".join(non_media_lines).strip()
+    if remaining_text:
+        return f"{remaining_text}\n\n{clean_tag}"
+    return clean_tag
+
+
+class _StreamMediaFilter:
+    """Filter for chat completion SSE streams to strip MEDIA_URL lines,
+
+    suppress localhost /v1/media/ markdown image clutter, and ensure
+    at most one clean MEDIA:<path> line is emitted across streaming chunks.
+    """
+
+    def __init__(self) -> None:
+        self.has_emitted_media: bool = False
+        self.buffer: str = ""
+        self.pending_blanks: list[str] = []
+
+    def _is_potential_media_line(self, srem: str) -> bool:
+        if not srem:
+            return False
+        for pfx in ("MEDIA:", "MEDIA_URL:", "!["):
+            if pfx.startswith(srem) or srem.startswith(pfx):
+                return True
+        return False
+
+    def process_chunk(self, chunk: str) -> list[str]:
+        self.buffer += chunk
+        lines = self.buffer.splitlines(keepends=True)
+        if not lines:
+            return []
+
+        ends_with_nl = self.buffer.endswith(("\n", "\r"))
+        if ends_with_nl:
+            complete_lines = lines
+            remainder = ""
+        else:
+            complete_lines = list(lines[:-1])
+            remainder = lines[-1]
+
+        srem = remainder.lstrip()
+        if self._is_potential_media_line(srem):
+            self.buffer = remainder
+        else:
+            self.buffer = ""
+
+        to_emit: list[str] = []
+        for line in complete_lines:
+            sline = line.strip()
+            if not sline:
+                self.pending_blanks.append(line)
+                continue
+
+            is_dup_media = sline.startswith("MEDIA:") and self.has_emitted_media
+            is_unwanted = (
+                is_dup_media
+                or sline.startswith("MEDIA_URL:")
+                or (sline.startswith("![") and "/v1/media/" in sline)
+            )
+            if is_unwanted:
+                self.pending_blanks.clear()
+                continue
+
+            if self.pending_blanks:
+                to_emit.extend(self.pending_blanks)
+                self.pending_blanks.clear()
+
+            if sline.startswith("MEDIA:"):
+                cand_path = sline.removeprefix("MEDIA:").strip().strip("'\"")
+                ending = "\n" if line.endswith("\n") else ""
+                to_emit.append(f"MEDIA:{cand_path}{ending}")
+                self.has_emitted_media = True
+            else:
+                to_emit.append(line)
+
+        if not self._is_potential_media_line(srem):
+            if self.pending_blanks:
+                to_emit.extend(self.pending_blanks)
+                self.pending_blanks.clear()
+            if remainder:
+                to_emit.append(remainder)
+
+        return to_emit
+
+    def finish(self) -> list[str]:
+        to_emit: list[str] = []
+        if self.buffer:
+            srem = self.buffer.strip()
+            is_dup_media = srem.startswith("MEDIA:") and self.has_emitted_media
+            is_unwanted = (
+                is_dup_media
+                or srem.startswith("MEDIA_URL:")
+                or (srem.startswith("![") and "/v1/media/" in srem)
+            )
+            if not is_unwanted:
+                if self.pending_blanks:
+                    to_emit.extend(self.pending_blanks)
+                    self.pending_blanks.clear()
+                if srem.startswith("MEDIA:"):
+                    cand_path = srem.removeprefix("MEDIA:").strip().strip("'\"")
+                    to_emit.append(f"MEDIA:{cand_path}")
+                    self.has_emitted_media = True
+                else:
+                    to_emit.append(self.buffer)
+            else:
+                self.pending_blanks.clear()
+            self.buffer = ""
+        elif self.pending_blanks:
+            to_emit.extend(self.pending_blanks)
+            self.pending_blanks.clear()
+        return to_emit
+
+
 def _json_bytes(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
@@ -952,11 +1090,35 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
             has_emitted_role = False
-            pending_media_paths: list[str] = []
-            has_emitted_media_url = False
+            media_filter = _StreamMediaFilter()
+
+            def _send_delta(text: str, model_name: str) -> None:
+                nonlocal has_emitted_role
+                if not text:
+                    return
+                self.bridge_server.metrics.record_tokens(1)
+                delta_payload: dict[str, Any] = {"content": text}
+                if not has_emitted_role:
+                    delta_payload["role"] = "assistant"
+                    has_emitted_role = True
+                chunk = {
+                    "id": stream_id,
+                    "object": "chat.completion.chunk",
+                    "created": now,
+                    "model": model_name,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": delta_payload,
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+                self.wfile.write(b"data: " + _json_bytes(chunk) + b"\n\n")
+                self.wfile.flush()
 
             def emit_item(item: dict[str, Any]) -> None:
-                nonlocal has_emitted_role, has_emitted_media_url
+                nonlocal has_emitted_role
                 itype = item.get("type")
                 if itype == "reasoning_delta":
                     chunk = {
@@ -975,31 +1137,11 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                     self.wfile.write(b"data: " + _json_bytes(chunk) + b"\n\n")
                     self.wfile.flush()
                 elif itype == "delta":
-                    self.bridge_server.metrics.record_tokens(1)
-                    content_str = str(item.get("content", ""))
-                    if "MEDIA:" in content_str:
-                        for line in content_str.splitlines():
-                            if line.strip().startswith("MEDIA:"):
-                                pending_media_paths.append(line.strip().removeprefix("MEDIA:").strip().strip("'\""))
-                    delta_payload: dict[str, Any] = {"content": item["content"]}
-                    if not has_emitted_role:
-                        delta_payload["role"] = "assistant"
-                        has_emitted_role = True
-                    chunk = {
-                        "id": stream_id,
-                        "object": "chat.completion.chunk",
-                        "created": now,
-                        "model": item.get("requested_model", "") or requested_model,
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": delta_payload,
-                                "finish_reason": None,
-                            }
-                        ],
-                    }
-                    self.wfile.write(b"data: " + _json_bytes(chunk) + b"\n\n")
-                    self.wfile.flush()
+                    raw_content = str(item.get("content", ""))
+                    target_model = item.get("requested_model", "") or requested_model
+                    deltas = media_filter.process_chunk(raw_content)
+                    for delta_text in deltas:
+                        _send_delta(delta_text, target_model)
                 elif itype == "tool_calls":
                     chunk = {
                         "id": stream_id,
@@ -1017,43 +1159,15 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                     self.wfile.write(b"data: " + _json_bytes(chunk) + b"\n\n")
                     self.wfile.flush()
                 elif itype == "finish":
-                    if pending_media_paths and not has_emitted_media_url:
-                        media_dir = (Path.home() / ".gemini" / "antigravity-cli" / "media").resolve()
-                        media_dir.mkdir(parents=True, exist_ok=True)
-                        safe_base = self._safe_media_base_url()
-                        for m_str in pending_media_paths:
-                            m_path = Path(m_str)
-                            if (
-                                m_path.is_file()
-                                and m_path.suffix.lower() in _ALLOWED_MEDIA_EXTS
-                                and _is_safe_media_path(m_path)
-                            ):
-                                unique_name = _store_media_file(m_path, media_dir)
-                                if unique_name:
-                                    media_url = f"{safe_base}/v1/media/{unique_name}"
-                                    markdown_link = f"![Generated Image]({media_url})"
-                                    media_url_line = f"MEDIA_URL:{media_url}"
-                                    url_chunk = {
-                                        "id": stream_id,
-                                        "object": "chat.completion.chunk",
-                                        "created": now,
-                                        "model": item.get("requested_model", "") or requested_model,
-                                        "choices": [
-                                            {
-                                                "index": 0,
-                                                "delta": {"content": f"\n\n{markdown_link}\n{media_url_line}"},
-                                                "finish_reason": None,
-                                            }
-                                        ],
-                                    }
-                                    self.wfile.write(b"data: " + _json_bytes(url_chunk) + b"\n\n")
-                                    self.wfile.flush()
-                        has_emitted_media_url = True
+                    target_model = item.get("requested_model", "") or requested_model
+                    final_deltas = media_filter.finish()
+                    for delta_text in final_deltas:
+                        _send_delta(delta_text, target_model)
                     chunk = {
                         "id": stream_id,
                         "object": "chat.completion.chunk",
                         "created": now,
-                        "model": item.get("requested_model", "") or requested_model,
+                        "model": target_model,
                         "choices": [
                             {
                                 "index": 0,
@@ -1160,29 +1274,8 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 
     def _completion_response(self, result: Any) -> dict[str, Any]:
         content_text = result.text if result.text else None
-        if content_text and "MEDIA:" in content_text and "MEDIA_URL:" not in content_text:
-            media_dir = (Path.home() / ".gemini" / "antigravity-cli" / "media").resolve()
-            media_dir.mkdir(parents=True, exist_ok=True)
-            safe_base = self._safe_media_base_url()
-            for line in content_text.splitlines():
-                sline = line.strip()
-                if sline.startswith("MEDIA:"):
-                    cand_str = sline.removeprefix("MEDIA:").strip().strip("'\"")
-                    cand_path = Path(cand_str)
-                    if (
-                        cand_path.is_file()
-                        and cand_path.suffix.lower() in _ALLOWED_MEDIA_EXTS
-                        and _is_safe_media_path(cand_path)
-                    ):
-                        unique_name = _store_media_file(cand_path, media_dir)
-                        if unique_name:
-                            media_url = f"{safe_base}/v1/media/{unique_name}"
-                            markdown_link = f"![Generated Image]({media_url})"
-                            media_url_line = f"MEDIA_URL:{media_url}"
-                            if markdown_link not in content_text:
-                                content_text = f"{content_text}\n\n{markdown_link}"
-                            if media_url_line not in content_text:
-                                content_text = f"{content_text}\n{media_url_line}"
+        if content_text and ("MEDIA:" in content_text or "MEDIA_URL:" in content_text or "/v1/media/" in content_text):
+            content_text = _deduplicate_media_lines(content_text)
 
         message: dict[str, Any] = {
             "role": "assistant",

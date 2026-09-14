@@ -8,7 +8,10 @@ Always run lifecycle operations from a **durable repository path** (e.g., `~/her
 > **Never use temporary directories** (such as `/tmp/...`) for production deployment. Temporary directories are subject to OS cleanup or reboot removal, which breaks relative source references during updates.
 
 ```bash
-# Clone or navigate to your durable repository path:
+# If ~/hermes-antigravity-bridge does not exist, clone it first:
+git clone https://github.com/usright003-cmyk/hermes-antigravity-bridge.git ~/hermes-antigravity-bridge
+
+# Navigate to your durable repository path:
 cd ~/hermes-antigravity-bridge
 git fetch origin
 git checkout main
@@ -61,14 +64,16 @@ On production Linux VMs, the bridge and Hermes operate under two distinct system
 To upgrade an existing production installation (e.g. from `73c3f84` to `main` containing `9e2e336` and deployment fixes):
 
 ```bash
-# 1. Enter the durable repository path
+# 1. If the durable repository directory does not exist yet, clone it:
+#    git clone https://github.com/usright003-cmyk/hermes-antigravity-bridge.git ~/hermes-antigravity-bridge
 cd ~/hermes-antigravity-bridge
 
-# 2. Fetch the latest release commit on main
+# 2. Fetch and checkout the latest release commit on main
 git fetch origin
 git checkout main
+git pull origin main
 
-# 3. Run the installer (or ./scripts/update.sh)
+# 3. Run the installer (shifts existing release to previous, links new release to current)
 ./scripts/install.sh
 
 # 4. Verify authenticated bridge readiness

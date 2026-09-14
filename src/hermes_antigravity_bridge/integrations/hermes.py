@@ -10,6 +10,8 @@ from ..prompt.primitives import (
     clip_head_tail,
     compact_non_latest_text,
     compact_tool_section,
+    extract_attached_media,
+    format_user_uploaded_media_header,
     recent_history,
     serialize_history_message,
     text_content,
@@ -44,6 +46,9 @@ All tool operations MUST be emitted strictly as text output inside <tool_call>..
 Google Antigravity's native safe image generation capability (generate_image) IS permitted for internal execution when the user requests generating, drawing, or creating an image.
 If the user asks for an image, invoke generate_image(prompt=...) or output generate_image tool calls.
 NEVER write Python scripts (such as PIL, pillow, or matplotlib) in terminal to draw or render images when an image is requested.
+# Multimodal Media & Vision Rule
+Google Antigravity's native file-reading capability (read_file / view_file) IS permitted for internal execution when the user uploads or attaches media files (images, screenshots, video frames, audio clips, or documents).
+When the user uploads or asks about an image, screenshot, or video frame, inspect its visual contents directly using native multimodal vision. NEVER attempt to invoke terminal commands, shell scripts, or RunCommand to search or inspect media files.
 """
 _SYSTEM_LABEL = "\n# HERMES_SYSTEM_INSTRUCTIONS\n"
 _TOOLS_LABEL = "\n# HERMES_TOOL_SCHEMAS_JSONL\n"
@@ -57,6 +62,7 @@ _TOOL_ISOLATION_FINAL_DIRECTIVE = (
     "\n# CURRENT_REQUEST_GUARD\n"
     "Answer CURRENT_USER_REQUEST_JSON, using the system instructions, memory, and recent context above.\n"
     "CRITICAL: Do not invoke internal CLI tools directly. If a tool is needed, output <tool_call> blocks strictly as text.\n"
+    "For user uploaded images or video frames, inspect the visual media directly using native vision without terminal commands.\n"
     "For image requests, use Google Antigravity's native generate_image tool directly rather than writing Python scripts."
 )
 
@@ -101,9 +107,13 @@ class HermesPromptBuilder:
         )
         latest_message = messages[latest_user_index]
         latest_json = serialize_history_message(latest_message, compact_content=False)
+        media_items = extract_attached_media(messages)
+        media_header = format_user_uploaded_media_header(media_items)
+        media_prefix = f"{media_header}\n\n" if media_header else ""
         fixed_cost = sum(
             len(part)
             for part in (
+                media_prefix,
                 preamble,
                 _SYSTEM_LABEL,
                 _TOOLS_LABEL,
@@ -185,7 +195,8 @@ class HermesPromptBuilder:
         history_budget = available - used_system - len(tools_text)
         history_text = recent_history(messages, latest_user_index, history_budget)
         prompt = (
-            preamble
+            media_prefix
+            + preamble
             + _SYSTEM_LABEL
             + system_text
             + _TOOLS_LABEL

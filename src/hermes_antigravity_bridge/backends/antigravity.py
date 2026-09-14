@@ -625,6 +625,7 @@ class AntigravityBackend:
             "--output-format",
             "stream-json",
             "--disable-slash-commands",
+            "--dangerously-skip-permissions",
         ]
         if self.config.sandbox:
             command.append("--sandbox")

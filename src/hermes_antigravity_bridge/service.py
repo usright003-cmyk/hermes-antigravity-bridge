@@ -430,7 +430,11 @@ class ChatCompletionService:
                 "Hermes Agent executes all tools in its host environment and provides the results back in subsequent turns.\n"
                 "IMAGE GENERATION EXCEPTION: If the user requests generating, drawing, or creating an image, "
                 "Google Antigravity's native image generation capability (generate_image) is permitted for internal execution. "
-                "Use generate_image directly to create the image; NEVER write Python PIL/matplotlib scripts in the terminal to draw images."
+                "Use generate_image directly to create the image; NEVER write Python PIL/matplotlib scripts in the terminal to draw images.\n"
+                "MULTIMODAL & VISION EXCEPTION: Reading user-uploaded images, screenshots, videos, or documents "
+                "(via read_file or view_file) is permitted for native multimodal perception. "
+                "When the user uploads or asks about an image or video frame, inspect its visual contents directly using native vision. "
+                "NEVER attempt to invoke terminal commands, shell scripts, or RunCommand to search or inspect media files."
             )
             prompt_messages.append({"role": "system", "content": tool_isolation_instruction})
         else:
@@ -441,7 +445,11 @@ class ChatCompletionService:
                 "No tools are available for this turn; respond directly in normal text.\n"
                 "IMAGE GENERATION EXCEPTION: If the user requests generating, drawing, or creating an image, "
                 "Google Antigravity's native image generation capability (generate_image) is permitted for internal execution. "
-                "Use generate_image directly to produce the image; NEVER write Python PIL/matplotlib scripts to draw images."
+                "Use generate_image directly to produce the image; NEVER write Python PIL/matplotlib scripts to draw images.\n"
+                "MULTIMODAL & VISION EXCEPTION: Reading user-uploaded images, screenshots, videos, or documents "
+                "(via read_file or view_file) is permitted for native multimodal perception. "
+                "When the user uploads or asks about an image or video frame, inspect its visual contents directly using native vision. "
+                "NEVER attempt to invoke terminal commands, shell scripts, or RunCommand to search or inspect media files."
             )
             prompt_messages.append({"role": "system", "content": no_tool_instruction})
         prompt = self.prompt_builder.build(
@@ -572,7 +580,11 @@ class ChatCompletionService:
                 "Hermes Agent executes all tools in its host environment and provides the results back in subsequent turns.\n"
                 "IMAGE GENERATION EXCEPTION: If the user requests generating, drawing, or creating an image, "
                 "Google Antigravity's native image generation capability (generate_image) is permitted for internal execution. "
-                "Use generate_image directly to create the image; NEVER write Python PIL/matplotlib scripts in the terminal to draw images."
+                "Use generate_image directly to create the image; NEVER write Python PIL/matplotlib scripts in the terminal to draw images.\n"
+                "MULTIMODAL & VISION EXCEPTION: Reading user-uploaded images, screenshots, videos, or documents "
+                "(via read_file or view_file) is permitted for native multimodal perception. "
+                "When the user uploads or asks about an image or video frame, inspect its visual contents directly using native vision. "
+                "NEVER attempt to invoke terminal commands, shell scripts, or RunCommand to search or inspect media files."
             )
             prompt_messages.append({"role": "system", "content": tool_isolation_instruction})
         else:
@@ -583,7 +595,11 @@ class ChatCompletionService:
                 "No tools are available for this turn; respond directly in normal text.\n"
                 "IMAGE GENERATION EXCEPTION: If the user requests generating, drawing, or creating an image, "
                 "Google Antigravity's native image generation capability (generate_image) is permitted for internal execution. "
-                "Use generate_image directly to produce the image; NEVER write Python PIL/matplotlib scripts to draw images."
+                "Use generate_image directly to produce the image; NEVER write Python PIL/matplotlib scripts to draw images.\n"
+                "MULTIMODAL & VISION EXCEPTION: Reading user-uploaded images, screenshots, videos, or documents "
+                "(via read_file or view_file) is permitted for native multimodal perception. "
+                "When the user uploads or asks about an image or video frame, inspect its visual contents directly using native vision. "
+                "NEVER attempt to invoke terminal commands, shell scripts, or RunCommand to search or inspect media files."
             )
             prompt_messages.append({"role": "system", "content": no_tool_instruction})
         prompt = self.prompt_builder.build(

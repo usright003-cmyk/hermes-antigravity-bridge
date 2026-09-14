@@ -505,3 +505,83 @@ def recent_history(
     if marker_len <= budget:
         return marker
     return ""
+
+
+def extract_attached_media(messages: Sequence[dict[str, Any]]) -> list[tuple[str, str]]:
+    """Scan messages and extract valid safe local media paths (kind, path) attached by the user."""
+    collected: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict):
+                    itype = str(item.get("type") or "").strip().lower()
+                    if itype in {
+                        "image_url",
+                        "input_image",
+                        "image",
+                        "video_url",
+                        "input_video",
+                        "video",
+                        "audio_url",
+                        "input_audio",
+                        "audio",
+                        "file_url",
+                        "input_file",
+                        "file",
+                    }:
+                        media_tag = _process_media_item(item)
+                        if (
+                            media_tag
+                            and media_tag.startswith("[Attached ")
+                            and " file: " in media_tag
+                            and "(restricted host path" not in media_tag
+                        ):
+                            prefix, _, rest = media_tag.partition(" file: ")
+                            kind = prefix.removeprefix("[Attached ").strip()
+                            path_val = rest.rstrip("]").strip()
+                            if path_val and path_val not in seen:
+                                seen.add(path_val)
+                                collected.append((kind, path_val))
+        elif isinstance(content, str):
+            for match in re.finditer(r"\[Attached\s+(\w+)\s+file:\s*([^\]]+)\]", content):
+                kind = match.group(1).strip()
+                path_val = match.group(2).strip()
+                if "(restricted host path" not in path_val and path_val not in seen:
+                    seen.add(path_val)
+                    collected.append((kind, path_val))
+
+    return collected
+
+
+def format_user_uploaded_media_header(media_items: Sequence[tuple[str, str]]) -> str:
+    """Format the top-level user media header recognized natively by Antigravity CLI."""
+    if not media_items:
+        return ""
+    images = [p for k, p in media_items if k in {"image", "input_image"}]
+    videos = [p for k, p in media_items if k in {"video", "input_video"}]
+    audios = [p for k, p in media_items if k in {"audio", "input_audio"}]
+    files = [p for k, p in media_items if k in {"file", "input_file"}]
+
+    sections: list[str] = []
+    if images:
+        header = f"The user has uploaded {len(images)} image(s):"
+        items = "\n".join(f"- {p}" for p in images)
+        sections.append(f"{header}\n{items}")
+    if videos:
+        header = f"The user has uploaded {len(videos)} video(s):"
+        items = "\n".join(f"- {p}" for p in videos)
+        sections.append(f"{header}\n{items}")
+    if audios:
+        header = f"The user has uploaded {len(audios)} audio(s):"
+        items = "\n".join(f"- {p}" for p in audios)
+        sections.append(f"{header}\n{items}")
+    if files:
+        header = f"The user has uploaded {len(files)} file(s):"
+        items = "\n".join(f"- {p}" for p in files)
+        sections.append(f"{header}\n{items}")
+
+    return "\n\n".join(sections)
+

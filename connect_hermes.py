@@ -626,6 +626,11 @@ def update_hermes_config(hermes_config_path: Path, token: str) -> list[str]:
     cfg["model"]["provider"] = "custom:antigravity"
     cfg["model"]["base_url"] = "http://127.0.0.1:8765/v1"
 
+    # Configure native image generation via Antigravity Bridge (zero paid API keys required)
+    cfg["image_provider"] = "custom:antigravity"
+    cfg["image_model"] = "gemini-3.8-flash"
+    cfg["image_api_base"] = "http://127.0.0.1:8765/v1"
+
     # Write back to config file
     if yaml is not None:
         with hermes_config_path.open("w", encoding="utf-8") as f:
@@ -933,6 +938,7 @@ def main() -> int:
         print("    Model    : gemini-3.8-flash (1,000,000 Token Context)")
         print("    Provider : custom:antigravity")
         print("    Endpoint : http://127.0.0.1:8765/v1")
+        print("    Image Gen: Built-in Native Imagen (Zero External Paid API Keys)")
         if existing:
             print(f"[+] Preserved your existing providers: {', '.join(existing)}")
             print("    (You can switch between providers anytime in Hermes with /model)")

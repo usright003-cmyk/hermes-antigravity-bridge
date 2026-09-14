@@ -980,7 +980,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                     if "MEDIA:" in content_str:
                         for line in content_str.splitlines():
                             if line.strip().startswith("MEDIA:"):
-                                pending_media_paths.append(line.strip().removeprefix("MEDIA:").strip())
+                                pending_media_paths.append(line.strip().removeprefix("MEDIA:").strip().strip("'\""))
                     delta_payload: dict[str, Any] = {"content": item["content"]}
                     if not has_emitted_role:
                         delta_payload["role"] = "assistant"
@@ -1031,6 +1031,8 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                                 unique_name = _store_media_file(m_path, media_dir)
                                 if unique_name:
                                     media_url = f"{safe_base}/v1/media/{unique_name}"
+                                    markdown_link = f"![Generated Image]({media_url})"
+                                    media_url_line = f"MEDIA_URL:{media_url}"
                                     url_chunk = {
                                         "id": stream_id,
                                         "object": "chat.completion.chunk",
@@ -1039,7 +1041,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                                         "choices": [
                                             {
                                                 "index": 0,
-                                                "delta": {"content": f"\nMEDIA_URL:{media_url}"},
+                                                "delta": {"content": f"\n\n{markdown_link}\n{media_url_line}"},
                                                 "finish_reason": None,
                                             }
                                         ],
@@ -1165,7 +1167,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             for line in content_text.splitlines():
                 sline = line.strip()
                 if sline.startswith("MEDIA:"):
-                    cand_str = sline.removeprefix("MEDIA:").strip()
+                    cand_str = sline.removeprefix("MEDIA:").strip().strip("'\"")
                     cand_path = Path(cand_str)
                     if (
                         cand_path.is_file()
@@ -1175,7 +1177,12 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                         unique_name = _store_media_file(cand_path, media_dir)
                         if unique_name:
                             media_url = f"{safe_base}/v1/media/{unique_name}"
-                            content_text = f"{content_text}\nMEDIA_URL:{media_url}"
+                            markdown_link = f"![Generated Image]({media_url})"
+                            media_url_line = f"MEDIA_URL:{media_url}"
+                            if markdown_link not in content_text:
+                                content_text = f"{content_text}\n\n{markdown_link}"
+                            if media_url_line not in content_text:
+                                content_text = f"{content_text}\n{media_url_line}"
 
         message: dict[str, Any] = {
             "role": "assistant",
@@ -1249,6 +1256,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             except Exception:  # noqa: BLE001
                 requested_model = "gemini-3.8-flash"
 
+        req_start = time.time() - 2.0
         try:
             actual_model = backend.resolve_model(requested_model)
             image_prompt = (
@@ -1266,14 +1274,19 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 
         img_path: Path | None = None
         for line in backend_res.response.splitlines():
-            if line.startswith("MEDIA:"):
-                cand = Path(line.removeprefix("MEDIA:").strip())
+            sline = line.strip()
+            if sline.startswith("MEDIA:"):
+                cand = Path(sline.removeprefix("MEDIA:").strip().strip("'\""))
                 if cand.is_file():
                     img_path = cand
                     break
 
+        backend_cfg = getattr(backend, "config", None)
+        backend_home = getattr(backend_cfg, "home", Path.home()) if backend_cfg is not None else Path.home()
+        fallback_homes = (Path.home(), backend_home) if backend_home != Path.home() else (Path.home(),)
+
         if not img_path and backend_res.conversation_id:
-            for base_dir in (Path.home(), getattr(backend.config, "home", Path.home())):
+            for base_dir in fallback_homes:
                 brain_dir = base_dir / ".gemini" / "antigravity-cli" / "brain" / str(backend_res.conversation_id)
                 if brain_dir.is_dir():
                     try:
@@ -1281,7 +1294,31 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                             [
                                 f
                                 for f in brain_dir.iterdir()
-                                if f.is_file() and f.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
+                                if f.is_file()
+                                and f.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+                                and f.stat().st_mtime >= req_start
+                            ],
+                            key=lambda p: p.stat().st_mtime,
+                            reverse=True,
+                        )
+                        if files:
+                            img_path = files[0]
+                            break
+                    except OSError:
+                        pass
+
+        if not img_path:
+            for base_dir in fallback_homes:
+                cand_media = base_dir / ".gemini" / "antigravity-cli" / "media"
+                if cand_media.is_dir():
+                    try:
+                        files = sorted(
+                            [
+                                f
+                                for f in cand_media.iterdir()
+                                if f.is_file()
+                                and f.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+                                and f.stat().st_mtime >= req_start
                             ],
                             key=lambda p: p.stat().st_mtime,
                             reverse=True,

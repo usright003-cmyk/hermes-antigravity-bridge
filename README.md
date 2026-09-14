@@ -305,7 +305,7 @@ See [SECURITY.md](SECURITY.md) and [docs/security-and-privacy.md](docs/security-
 ## 🧪 Verification & Testing
 
 ```bash
-# Run full test suite (190 passed, 2 skipped across 192 test cases)
+# Run full test suite (207 passed, 2 skipped across 209 test cases)
 python -m pytest
 
 # Verify bytecode compilation

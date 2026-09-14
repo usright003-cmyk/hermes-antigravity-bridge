@@ -40,6 +40,10 @@ When no tool is required, answer normally and emit no <tool_call> tag.
 You MUST NEVER attempt to invoke internal tools, functions, or agent capabilities directly (such as RunCommand, run_command, ViewFile, view_file, write_to_file, read_file, edit_file, browse, terminal, etc.).
 Any direct internal tool invocation will be rejected and denied by strict security policy.
 All tool operations MUST be emitted strictly as text output inside <tool_call>...</tool_call> tags for the Hermes client to execute.
+# Image Generation Rule
+Google Antigravity's native safe image generation capability (generate_image) IS permitted for internal execution when the user requests generating, drawing, or creating an image.
+If the user asks for an image, invoke generate_image(prompt=...) or output generate_image tool calls.
+NEVER write Python scripts (such as PIL, pillow, or matplotlib) in terminal to draw or render images when an image is requested.
 """
 _SYSTEM_LABEL = "\n# HERMES_SYSTEM_INSTRUCTIONS\n"
 _TOOLS_LABEL = "\n# HERMES_TOOL_SCHEMAS_JSONL\n"
@@ -52,7 +56,8 @@ _FINAL_DIRECTIVE = (
 _TOOL_ISOLATION_FINAL_DIRECTIVE = (
     "\n# CURRENT_REQUEST_GUARD\n"
     "Answer CURRENT_USER_REQUEST_JSON, using the system instructions, memory, and recent context above.\n"
-    "CRITICAL: Do not invoke internal CLI tools directly. If a tool is needed, output <tool_call> blocks strictly as text."
+    "CRITICAL: Do not invoke internal CLI tools directly. If a tool is needed, output <tool_call> blocks strictly as text.\n"
+    "For image requests, use Google Antigravity's native generate_image tool directly rather than writing Python scripts."
 )
 
 

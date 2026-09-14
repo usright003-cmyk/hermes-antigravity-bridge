@@ -12,7 +12,7 @@ from .contracts import ChatCompletionResult, TextBackend
 from .errors import InvalidRequest, InvalidToolCall
 from .integrations.hermes import HermesPromptBuilder
 from .prompt.budget import PromptBudget
-from .tool_calls import parse_tool_calls
+from .tool_calls import _repair_json_string, parse_tool_calls
 
 _LOG = logging.getLogger(__name__)
 _ALLOWED_FIELDS = {
@@ -103,6 +103,77 @@ _EXTERNAL_IMAGE_TOOL_NAMES = {
 def _filter_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Preserve advertised tools including image generation so Hermes can dispatch them."""
     return list(tools)
+
+
+def _extract_unadvertised_image_tool_call(
+    text: str, allowed_tool_names: set[str]
+) -> tuple[str, str, str | None] | None:
+    """Detect if model emitted an image tool call that Hermes did not advertise.
+
+    Returns (tool_name, prompt, aspect_ratio) or None.
+    """
+    if "<tool_call" not in text.lower():
+        return None
+    image_tool_names = {"generate_image", "image_gen", "image_generation", "text_to_image", "draw_image"}
+    if any(name.lower() in allowed_tool_names for name in image_tool_names):
+        return None
+
+    tag_start = re.compile(r"<tool_call(?:\s+[^>]*)?>", re.IGNORECASE)
+    tag_end = re.compile(r"</tool_call\s*>", re.IGNORECASE)
+    for start_match in tag_start.finditer(text):
+        end_match = tag_end.search(text, start_match.end())
+        if not end_match:
+            continue
+        block_content = text[start_match.end() : end_match.start()].strip()
+        payload = None
+        try:
+            payload = json.loads(block_content)
+        except (json.JSONDecodeError, TypeError):
+            try:
+                payload = json.loads(_repair_json_string(block_content))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                payload = None
+        if not isinstance(payload, dict):
+            continue
+        fn = payload.get("function")
+        if isinstance(fn, dict):
+            fn_name = str(fn.get("name") or "").strip().lower()
+            fn_args = fn.get("arguments") or {}
+        else:
+            fn_name = str(payload.get("name") or "").strip().lower()
+            fn_args = payload.get("arguments") or payload.get("parameters") or {}
+        for pfx in ("default_api:", "antigravity:", "tools:", "functions."):
+            if fn_name.startswith(pfx):
+                fn_name = fn_name.removeprefix(pfx)
+        if fn_name in image_tool_names:
+            if isinstance(fn_args, str):
+                try:
+                    fn_args = json.loads(fn_args)
+                except (json.JSONDecodeError, TypeError):
+                    try:
+                        fn_args = json.loads(_repair_json_string(fn_args))
+                    except (json.JSONDecodeError, TypeError, ValueError):
+                        fn_args = {"prompt": fn_args}
+            if isinstance(fn_args, dict):
+                args_lower = {str(k).lower(): v for k, v in fn_args.items()}
+                prompt = str(
+                    args_lower.get("prompt")
+                    or args_lower.get("description")
+                    or args_lower.get("query")
+                    or args_lower.get("text")
+                    or args_lower.get("caption")
+                    or args_lower.get("input")
+                    or args_lower.get("prompt_text")
+                    or ""
+                ).strip()
+                if prompt:
+                    aspect = str(
+                        args_lower.get("aspectratio")
+                        or args_lower.get("aspect_ratio")
+                        or ""
+                    ).strip() or None
+                    return fn_name, prompt, aspect
+    return None
 
 
 def _extract_unstreamed_text(full_text: str, streamed_text: str) -> str:
@@ -308,7 +379,10 @@ class ChatCompletionService:
                 "All tool operations MUST be emitted strictly as text output inside <tool_call>...</tool_call> tags "
                 "for the Hermes client to execute:\n"
                 '<tool_call>{"id":"call_unique","type":"function","function":{"name":"TOOL_NAME","arguments":{}}}</tool_call>\n'
-                "Hermes Agent executes all tools in its host environment and provides the results back in subsequent turns."
+                "Hermes Agent executes all tools in its host environment and provides the results back in subsequent turns.\n"
+                "IMAGE GENERATION EXCEPTION: If the user requests generating, drawing, or creating an image, "
+                "Google Antigravity's native image generation capability (generate_image) is permitted for internal execution. "
+                "Use generate_image directly to create the image; NEVER write Python PIL/matplotlib scripts in the terminal to draw images."
             )
             prompt_messages.append({"role": "system", "content": tool_isolation_instruction})
         else:
@@ -316,7 +390,10 @@ class ChatCompletionService:
                 "CRITICAL TOOL ISOLATION RULE:\n"
                 "You MUST NEVER attempt to invoke internal tools, functions, or agent capabilities directly "
                 "(such as RunCommand, run_command, ViewFile, view_file, write_to_file, read_file, edit_file, browse, terminal, etc.). "
-                "No tools are available for this turn; respond directly in normal text."
+                "No tools are available for this turn; respond directly in normal text.\n"
+                "IMAGE GENERATION EXCEPTION: If the user requests generating, drawing, or creating an image, "
+                "Google Antigravity's native image generation capability (generate_image) is permitted for internal execution. "
+                "Use generate_image directly to produce the image; NEVER write Python PIL/matplotlib scripts to draw images."
             )
             prompt_messages.append({"role": "system", "content": no_tool_instruction})
         prompt = self.prompt_builder.build(
@@ -354,17 +431,56 @@ class ChatCompletionService:
         reasoning_content: str | None = "\n\n".join(thought_matches) if thought_matches else None
         cleaned_response = _THOUGHT_RE.sub("", raw_response).strip()
 
-        parsed = parse_tool_calls(
-            cleaned_response,
-            allowed_tool_names=allowed_names,
-            mode=self.tool_call_mode,
-        )
         usage = backend_result.usage
         normalized_usage = {
             "prompt_tokens": int(usage.get("input_tokens", 0) or 0),
             "completion_tokens": int(usage.get("output_tokens", 0) or 0),
             "total_tokens": int(usage.get("total_tokens", 0) or 0),
         }
+
+        unadvertised_img = _extract_unadvertised_image_tool_call(cleaned_response, allowed_names)
+        if unadvertised_img:
+            _, img_prompt, aspect_ratio = unadvertised_img
+            _LOG.info("Executing unadvertised image tool call via native generate_image: %s", img_prompt)
+            img_req = f"Please generate an image using your native generate_image tool. Image prompt: {img_prompt}"
+            if aspect_ratio:
+                img_req += f", AspectRatio: {aspect_ratio}"
+            try:
+                img_backend_res = self.backend.generate(img_req, actual_model)
+                img_line = next(
+                    (line.strip() for line in img_backend_res.response.splitlines() if line.strip().startswith("MEDIA:")),
+                    None,
+                )
+                surrounding_text = re.sub(
+                    r"<tool_call(?:\s+[^>]*)?>.*?</tool_call\s*>", "", cleaned_response, flags=re.DOTALL | re.IGNORECASE
+                ).strip()
+                if img_line:
+                    if surrounding_text:
+                        resp_text = f"{surrounding_text}\n\n{img_line}"
+                    else:
+                        resp_text = f"Here is the generated image for: {img_prompt}\n\n{img_line}"
+                else:
+                    if surrounding_text:
+                        resp_text = f"{surrounding_text}\n\n{img_backend_res.response}"
+                    else:
+                        resp_text = img_backend_res.response
+                return ChatCompletionResult(
+                    text=resp_text,
+                    tool_calls=[],
+                    usage=normalized_usage,
+                    requested_model=requested,
+                    actual_model=actual_model,
+                    reasoning_content=reasoning_content,
+                )
+            except Exception as exc:  # noqa: BLE001
+                _LOG.warning("Failed to fulfill unadvertised image tool call: %s", exc)
+
+        parsed = parse_tool_calls(
+            cleaned_response,
+            allowed_tool_names=allowed_names,
+            mode=self.tool_call_mode,
+        )
+
         if not parsed.text and not parsed.tool_calls and not reasoning_content:
             raise InvalidRequest("backend produced neither assistant text nor tool calls")
         return ChatCompletionResult(
@@ -399,7 +515,10 @@ class ChatCompletionService:
                 "All tool operations MUST be emitted strictly as text output inside <tool_call>...</tool_call> tags "
                 "for the Hermes client to execute:\n"
                 '<tool_call>{"id":"call_unique","type":"function","function":{"name":"TOOL_NAME","arguments":{}}}</tool_call>\n'
-                "Hermes Agent executes all tools in its host environment and provides the results back in subsequent turns."
+                "Hermes Agent executes all tools in its host environment and provides the results back in subsequent turns.\n"
+                "IMAGE GENERATION EXCEPTION: If the user requests generating, drawing, or creating an image, "
+                "Google Antigravity's native image generation capability (generate_image) is permitted for internal execution. "
+                "Use generate_image directly to create the image; NEVER write Python PIL/matplotlib scripts in the terminal to draw images."
             )
             prompt_messages.append({"role": "system", "content": tool_isolation_instruction})
         else:
@@ -407,7 +526,10 @@ class ChatCompletionService:
                 "CRITICAL TOOL ISOLATION RULE:\n"
                 "You MUST NEVER attempt to invoke internal tools, functions, or agent capabilities directly "
                 "(such as RunCommand, run_command, ViewFile, view_file, write_to_file, read_file, edit_file, browse, terminal, etc.). "
-                "No tools are available for this turn; respond directly in normal text."
+                "No tools are available for this turn; respond directly in normal text.\n"
+                "IMAGE GENERATION EXCEPTION: If the user requests generating, drawing, or creating an image, "
+                "Google Antigravity's native image generation capability (generate_image) is permitted for internal execution. "
+                "Use generate_image directly to produce the image; NEVER write Python PIL/matplotlib scripts to draw images."
             )
             prompt_messages.append({"role": "system", "content": no_tool_instruction})
         prompt = self.prompt_builder.build(
@@ -578,6 +700,52 @@ class ChatCompletionService:
                         backend_response = event["response"]
                         raw = backend_response.response
                         cleaned_raw = _THOUGHT_RE.sub("", raw).strip()
+                        usage = backend_response.usage
+                        normalized_usage = {
+                            "prompt_tokens": int(usage.get("input_tokens", 0) or 0),
+                            "completion_tokens": int(usage.get("output_tokens", 0) or 0),
+                            "total_tokens": int(usage.get("total_tokens", 0) or 0),
+                        }
+                        unadvertised_img = _extract_unadvertised_image_tool_call(cleaned_raw, allowed_names)
+                        if unadvertised_img:
+                            _, img_prompt, aspect_ratio = unadvertised_img
+                            _LOG.info("Executing unadvertised image tool call in stream: %s", img_prompt)
+                            img_req = f"Please generate an image using your native generate_image tool. Image prompt: {img_prompt}"
+                            if aspect_ratio:
+                                img_req += f", AspectRatio: {aspect_ratio}"
+                            try:
+                                img_backend_res = self.backend.generate(img_req, actual_model)
+                                img_line = next(
+                                    (line.strip() for line in img_backend_res.response.splitlines() if line.strip().startswith("MEDIA:")),
+                                    None,
+                                )
+                                surrounding_text = re.sub(
+                                    r"<tool_call(?:\s+[^>]*)?>.*?</tool_call\s*>", "", cleaned_raw, flags=re.DOTALL | re.IGNORECASE
+                                ).strip()
+                                if streamed_text:
+                                    unstreamed = f"\n\n{img_line}" if img_line else f"\n\n{img_backend_res.response}"
+                                else:
+                                    if surrounding_text:
+                                        unstreamed = f"{surrounding_text}\n\n{img_line}" if img_line else f"{surrounding_text}\n\n{img_backend_res.response}"
+                                    else:
+                                        unstreamed = f"Here is the generated image for: {img_prompt}\n\n{img_line}" if img_line else img_backend_res.response
+                                yield {
+                                    "type": "delta",
+                                    "content": unstreamed,
+                                    "requested_model": requested,
+                                    "actual_model": actual_model,
+                                }
+                                yield {
+                                    "type": "finish",
+                                    "finish_reason": "stop",
+                                    "usage": normalized_usage,
+                                    "requested_model": requested,
+                                    "actual_model": actual_model,
+                                }
+                                return
+                            except Exception as exc:  # noqa: BLE001
+                                _LOG.warning("Failed to fulfill unadvertised image tool call in stream: %s", exc)
+
                         try:
                             parsed = parse_tool_calls(
                                 cleaned_raw,
@@ -602,22 +770,12 @@ class ChatCompletionService:
                                     "type": "tool_call_parse_error",
                                     "message": str(exc),
                                 },
-                                "usage": {
-                                    "prompt_tokens": int(backend_response.usage.get("input_tokens", 0) or 0),
-                                    "completion_tokens": int(backend_response.usage.get("output_tokens", 0) or 0),
-                                    "total_tokens": int(backend_response.usage.get("total_tokens", 0) or 0),
-                                },
+                                "usage": normalized_usage,
                                 "requested_model": requested,
                                 "actual_model": actual_model,
                             }
                             return
 
-                        usage = backend_response.usage
-                        normalized_usage = {
-                            "prompt_tokens": int(usage.get("input_tokens", 0) or 0),
-                            "completion_tokens": int(usage.get("output_tokens", 0) or 0),
-                            "total_tokens": int(usage.get("total_tokens", 0) or 0),
-                        }
                         if parsed.tool_calls:
                             if has_tool_call_start and parsed.text:
                                 unstreamed = _extract_unstreamed_text(parsed.text, streamed_text)
@@ -642,6 +800,7 @@ class ChatCompletionService:
                                 "actual_model": actual_model,
                             }
                         else:
+
                             if parsed.text:
                                 unstreamed = _extract_unstreamed_text(parsed.text, streamed_text)
                                 if unstreamed:
@@ -683,17 +842,59 @@ class ChatCompletionService:
                     "actual_model": actual_model,
                 }
             cleaned_response = _THOUGHT_RE.sub("", backend_result.response).strip()
-            parsed = parse_tool_calls(
-                cleaned_response,
-                allowed_tool_names=allowed_names,
-                mode=self.tool_call_mode,
-            )
             usage = backend_result.usage
             normalized_usage = {
                 "prompt_tokens": int(usage.get("input_tokens", 0) or 0),
                 "completion_tokens": int(usage.get("output_tokens", 0) or 0),
                 "total_tokens": int(usage.get("total_tokens", 0) or 0),
             }
+            unadvertised_img = _extract_unadvertised_image_tool_call(cleaned_response, allowed_names)
+            if unadvertised_img:
+                _, img_prompt, aspect_ratio = unadvertised_img
+                img_req = f"Please generate an image using your native generate_image tool. Image prompt: {img_prompt}"
+                if aspect_ratio:
+                    img_req += f", AspectRatio: {aspect_ratio}"
+                try:
+                    img_backend_res = self.backend.generate(img_req, actual_model)
+                    img_line = next(
+                        (line.strip() for line in img_backend_res.response.splitlines() if line.strip().startswith("MEDIA:")),
+                        None,
+                    )
+                    surrounding_text = re.sub(
+                        r"<tool_call(?:\s+[^>]*)?>.*?</tool_call\s*>", "", cleaned_response, flags=re.DOTALL | re.IGNORECASE
+                    ).strip()
+                    if img_line:
+                        if surrounding_text:
+                            resp_text = f"{surrounding_text}\n\n{img_line}"
+                        else:
+                            resp_text = f"Here is the generated image for: {img_prompt}\n\n{img_line}"
+                    else:
+                        if surrounding_text:
+                            resp_text = f"{surrounding_text}\n\n{img_backend_res.response}"
+                        else:
+                            resp_text = img_backend_res.response
+                    yield {
+                        "type": "delta",
+                        "content": resp_text,
+                        "requested_model": requested,
+                        "actual_model": actual_model,
+                    }
+                    yield {
+                        "type": "finish",
+                        "finish_reason": "stop",
+                        "usage": normalized_usage,
+                        "requested_model": requested,
+                        "actual_model": actual_model,
+                    }
+                    return
+                except Exception as exc:  # noqa: BLE001
+                    _LOG.warning("Failed to fulfill unadvertised image tool call: %s", exc)
+
+            parsed = parse_tool_calls(
+                cleaned_response,
+                allowed_tool_names=allowed_names,
+                mode=self.tool_call_mode,
+            )
             if parsed.tool_calls:
                 if parsed.text:
                     yield {
@@ -716,6 +917,7 @@ class ChatCompletionService:
                     "actual_model": actual_model,
                 }
             else:
+
                 yield {
                     "type": "delta",
                     "content": parsed.text,

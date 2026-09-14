@@ -203,6 +203,9 @@ def is_false_success(result: Mapping[str, Any]) -> bool:
 _ALLOWED_INTERNAL_TOOLS = {
     "generate_image",
     "image_generation",
+    "image_gen",
+    "draw_image",
+    "text_to_image",
     "view_file",
     "read_url_content",
     "search_web",
@@ -419,8 +422,8 @@ def event_indicates_internal_tool(event: Mapping[str, Any]) -> bool:
         if event_name == "artifact":
             artifact = event.get("artifact") if isinstance(event, dict) else None
             if isinstance(artifact, dict) and any(
-                str(artifact.get("path") or artifact.get("filename") or "").lower().endswith(ext)
-                for ext in (".jpg", ".jpeg", ".png", ".webp")
+                str(artifact.get("path") or artifact.get("filename") or artifact.get("file_path") or "").lower().endswith(ext)
+                for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif")
             ):
                 return False
         return True
@@ -912,10 +915,12 @@ class AntigravityBackend:
         writer.start()
 
         deadline = time.monotonic() + self.config.timeout_seconds
+        run_start_time = time.time() - 2.0
         result: dict[str, Any] = {}
         diagnostics = ""
         accumulated_text_deltas: list[str] = []
         intercepted_tool_calls: list[dict[str, Any]] = []
+        discovered_image_paths: list[Path] = []
         denial_detected = False
         denial_tool_name: str | None = None
         try:
@@ -971,6 +976,13 @@ class AntigravityBackend:
                 if event.get("event") == "step_update":
                     step_update = event.get("step_update")
                     if isinstance(step_update, dict):
+                        art = step_update.get("artifact")
+                        if isinstance(art, dict):
+                            p_val = art.get("path") or art.get("filename") or art.get("file_path")
+                            if p_val:
+                                p = Path(str(p_val).strip().strip("'\""))
+                                if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
+                                    discovered_image_paths.append(p)
                         thought = (
                             step_update.get("thought_delta")
                             or step_update.get("reasoning_delta")
@@ -996,6 +1008,14 @@ class AntigravityBackend:
                         if is_tool_confirmation_or_denial(step_update):
                             denial_detected = True
                             intercepted_tool_calls.extend(extract_tool_calls_from_event(step_update))
+                elif event.get("event") == "artifact":
+                    art = event.get("artifact")
+                    if isinstance(art, dict):
+                        p_val = art.get("path") or art.get("filename") or art.get("file_path")
+                        if p_val:
+                            p = Path(str(p_val).strip().strip("'\""))
+                            if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
+                                discovered_image_paths.append(p)
                 elif event.get("event") in ("thought", "thinking", "reasoning", "reasoning_delta"):
                     thought = (
                         event.get("content")
@@ -1007,6 +1027,20 @@ class AntigravityBackend:
                         on_reasoning_delta(str(thought))
                 if event.get("event") == "result" and isinstance(event.get("result"), dict):
                     result = dict(event["result"])
+                    for art_key in ("artifacts", "files", "media"):
+                        arts = result.get(art_key)
+                        if isinstance(arts, list):
+                            for a in arts:
+                                if isinstance(a, dict):
+                                    p_val = a.get("path") or a.get("filename") or a.get("file_path")
+                                elif isinstance(a, str):
+                                    p_val = a
+                                else:
+                                    p_val = None
+                                if p_val:
+                                    p = Path(str(p_val).strip().strip("'\""))
+                                    if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
+                                        discovered_image_paths.append(p)
                     if result.get("denied_actions"):
                         denial_detected = True
                         for da in result["denied_actions"]:
@@ -1145,28 +1179,56 @@ class AntigravityBackend:
 
         # Discover native Google Imagen generated images for this turn and attach MEDIA tag for Hermes
         conv_id = result.get("conversation_id")
+        candidate_dirs: list[Path] = []
         if conv_id:
             for base_dir in (Path.home(), self.config.home):
-                brain_dir = base_dir / ".gemini" / "antigravity-cli" / "brain" / str(conv_id)
-                if brain_dir.is_dir():
-                    try:
-                        img_files = sorted(
-                            [
-                                f
-                                for f in brain_dir.iterdir()
-                                if f.is_file() and f.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
-                            ],
-                            key=lambda p: p.stat().st_mtime,
-                            reverse=True,
-                        )
-                        if img_files:
-                            img_path = img_files[0]
-                            media_tag = f"MEDIA:{img_path.as_posix()}"
-                            if media_tag not in response:
-                                response = f"{response}\n\n{media_tag}".strip()
-                            break
-                    except OSError:
-                        pass
+                candidate_dirs.append(base_dir / ".gemini" / "antigravity-cli" / "brain" / str(conv_id))
+        for base_dir in (Path.home(), self.config.home):
+            candidate_dirs.append(base_dir / ".gemini" / "antigravity-cli" / "media")
+        candidate_dirs.append(cwd)
+
+        img_candidates: list[Path] = []
+        for p in discovered_image_paths:
+            if p.is_file() and p not in img_candidates:
+                img_candidates.append(p)
+
+        for cdir in candidate_dirs:
+            if cdir.is_dir():
+                try:
+                    for f in cdir.iterdir():
+                        if (
+                            f.is_file()
+                            and f.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+                            and f not in img_candidates
+                            and (f in discovered_image_paths or f.stat().st_mtime >= run_start_time)
+                        ):
+                            img_candidates.append(f)
+                except OSError:
+                    pass
+
+        if img_candidates:
+            img_candidates.sort(key=lambda p: (p.stat().st_mtime if p.is_file() else 0), reverse=True)
+            latest_img = img_candidates[0]
+            bridge_media_dir = (Path.home() / ".gemini" / "antigravity-cli" / "media").resolve()
+            try:
+                bridge_media_dir.mkdir(parents=True, exist_ok=True)
+                if latest_img.parent.resolve() != bridge_media_dir:
+                    dest_file = bridge_media_dir / latest_img.name
+                    if (
+                        dest_file.exists()
+                        and dest_file.resolve() != latest_img.resolve()
+                        and latest_img.stat().st_mtime > dest_file.stat().st_mtime
+                    ):
+                        dest_file = bridge_media_dir / f"{latest_img.stem}_{int(time.time()*1000)}{latest_img.suffix}"
+                    if not dest_file.exists() or latest_img.stat().st_mtime > dest_file.stat().st_mtime:
+                        shutil.copy2(latest_img, dest_file)
+                    latest_img = dest_file
+            except OSError as exc:
+                _LOG.debug("Could not copy image to media directory: %s", exc)
+
+            media_tag = f"MEDIA:{latest_img.as_posix()}"
+            if media_tag not in response:
+                response = f"{response}\n\n{media_tag}".strip()
 
         result["response"] = response
         return result

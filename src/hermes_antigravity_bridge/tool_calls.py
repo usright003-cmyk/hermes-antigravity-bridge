@@ -369,6 +369,7 @@ def parse_tool_calls(
                 {"run_command", "terminal", "bash", "shell", "exec", "runcommand", "command"},
                 {"read_file", "view_file", "readfile", "viewfile"},
                 {"write_file", "write_to_file", "writefile", "writetofile"},
+                {"image_gen", "generate_image", "image_generation", "text_to_image", "draw_image"},
             ]
             c_low = clean_name.lower()
             for group in synonym_groups:

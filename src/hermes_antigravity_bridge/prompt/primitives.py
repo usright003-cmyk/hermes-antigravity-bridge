@@ -8,6 +8,7 @@ import json
 import mimetypes
 import os
 import re
+import tempfile
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -136,10 +137,12 @@ def _is_safe_media_path(cand: Path) -> bool:
 
     media_dir = (Path.home() / ".gemini" / "antigravity-cli" / "media").resolve()
     brain_dir = (Path.home() / ".gemini" / "antigravity-cli" / "brain").resolve()
+    bridge_state_dir = (Path.home() / ".local" / "state" / "hermes-antigravity-bridge").resolve()
+    temp_dir = Path(tempfile.gettempdir()).resolve()
     cwd_dir = Path.cwd().resolve()
     user_home = Path.home().resolve()
 
-    safe_roots: list[Path] = [media_dir, brain_dir]
+    safe_roots: list[Path] = [media_dir, brain_dir, bridge_state_dir, temp_dir]
     is_fs_root = cwd_dir == Path(cwd_dir.anchor).resolve() or cwd_dir == Path("/").resolve()
     if cwd_dir != user_home and not is_fs_root:
         safe_roots.append(cwd_dir)

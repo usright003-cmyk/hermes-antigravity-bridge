@@ -299,6 +299,26 @@ class ChatCompletionService:
         prompt_messages = list(messages)
         if schema_instruction:
             prompt_messages.append({"role": "system", "content": schema_instruction})
+        if filtered_tools:
+            tool_isolation_instruction = (
+                "CRITICAL TOOL ISOLATION & EXECUTION RULES:\n"
+                "You MUST NEVER attempt to invoke internal tools, functions, or agent capabilities directly "
+                "(such as RunCommand, run_command, ViewFile, view_file, write_to_file, read_file, edit_file, browse, terminal, etc.). "
+                "Any direct internal tool invocation will be rejected and denied by strict security policy. "
+                "All tool operations MUST be emitted strictly as text output inside <tool_call>...</tool_call> tags "
+                "for the Hermes client to execute:\n"
+                '<tool_call>{"id":"call_unique","type":"function","function":{"name":"TOOL_NAME","arguments":{}}}</tool_call>\n'
+                "Hermes Agent executes all tools in its host environment and provides the results back in subsequent turns."
+            )
+            prompt_messages.append({"role": "system", "content": tool_isolation_instruction})
+        else:
+            no_tool_instruction = (
+                "CRITICAL TOOL ISOLATION RULE:\n"
+                "You MUST NEVER attempt to invoke internal tools, functions, or agent capabilities directly "
+                "(such as RunCommand, run_command, ViewFile, view_file, write_to_file, read_file, edit_file, browse, terminal, etc.). "
+                "No tools are available for this turn; respond directly in normal text."
+            )
+            prompt_messages.append({"role": "system", "content": no_tool_instruction})
         prompt = self.prompt_builder.build(
             prompt_messages,
             tools=filtered_tools or None,
@@ -370,6 +390,26 @@ class ChatCompletionService:
         prompt_messages = list(messages)
         if schema_instruction:
             prompt_messages.append({"role": "system", "content": schema_instruction})
+        if filtered_tools:
+            tool_isolation_instruction = (
+                "CRITICAL TOOL ISOLATION & EXECUTION RULES:\n"
+                "You MUST NEVER attempt to invoke internal tools, functions, or agent capabilities directly "
+                "(such as RunCommand, run_command, ViewFile, view_file, write_to_file, read_file, edit_file, browse, terminal, etc.). "
+                "Any direct internal tool invocation will be rejected and denied by strict security policy. "
+                "All tool operations MUST be emitted strictly as text output inside <tool_call>...</tool_call> tags "
+                "for the Hermes client to execute:\n"
+                '<tool_call>{"id":"call_unique","type":"function","function":{"name":"TOOL_NAME","arguments":{}}}</tool_call>\n'
+                "Hermes Agent executes all tools in its host environment and provides the results back in subsequent turns."
+            )
+            prompt_messages.append({"role": "system", "content": tool_isolation_instruction})
+        else:
+            no_tool_instruction = (
+                "CRITICAL TOOL ISOLATION RULE:\n"
+                "You MUST NEVER attempt to invoke internal tools, functions, or agent capabilities directly "
+                "(such as RunCommand, run_command, ViewFile, view_file, write_to_file, read_file, edit_file, browse, terminal, etc.). "
+                "No tools are available for this turn; respond directly in normal text."
+            )
+            prompt_messages.append({"role": "system", "content": no_tool_instruction})
         prompt = self.prompt_builder.build(
             prompt_messages,
             tools=filtered_tools or None,

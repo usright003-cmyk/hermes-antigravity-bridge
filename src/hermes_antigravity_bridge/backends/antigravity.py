@@ -14,6 +14,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,28 @@ _TRANSIENT_MARKERS = (
     "subscriber fell behind",
     "connection to the agent was interrupted",
 )
+
+
+def is_transient_backend_error(exc: Exception) -> bool:
+    """Determine whether an upstream error represents a transient network reset."""
+    if isinstance(exc, (ToolIsolationError, BackendProtocolError)):
+        return False
+    msg = str(exc).lower()
+    non_transient_markers = (
+        "empty response",
+        "soft-denied",
+        "denied",
+        "tool confirmation",
+        "internal tool",
+        "false-success",
+        "tool_isolation",
+        "permission",
+    )
+    if any(m in msg for m in non_transient_markers):
+        return False
+    return any(marker in msg for marker in _TRANSIENT_MARKERS)
+
+
 _TOOL_EVENT_NAMES = {
     "tool",
     "tool_call",
@@ -186,13 +209,179 @@ _ALLOWED_INTERNAL_TOOLS = {
 }
 
 
+def is_tool_confirmation_or_denial(event: Mapping[str, Any]) -> bool:
+    """Check if event represents a tool confirmation prompt or denial rather than tool execution."""
+    if not isinstance(event, dict):
+        return False
+    event_name = str(event.get("event") or event.get("type") or "").strip().lower()
+    if any(m in event_name for m in ("confirmation", "denial", "denied", "permission", "ask_user", "ask_permission")):
+        return True
+    status = str(event.get("status") or "").strip().lower()
+    if any(m in status for m in ("soft-denied", "denied", "rejected", "confirmation-required")):
+        return True
+    state = str(event.get("state") or "").strip().upper()
+    step_type = str(event.get("step_type") or "").strip().lower()
+    if step_type == "tool" and state in ("ERROR", "CANCELLED"):
+        return True
+    if event.get("denied_actions"):
+        return True
+
+    step_update = event.get("step_update")
+    if isinstance(step_update, dict) and is_tool_confirmation_or_denial(step_update):
+        return True
+
+    error_obj = event.get("error")
+    if isinstance(error_obj, dict):
+        err_msg = str(error_obj.get("message") or "").lower()
+        if any(m in err_msg for m in ("denied", "permission", "soft-denied", "restricted")):
+            return True
+
+    for val in event.values():
+        if isinstance(val, str):
+            v_low = val.lower()
+            if any(m in v_low for m in (
+                "soft-denied",
+                "tool confirmation",
+                "user denied permission",
+                "permission check failed",
+                "confirmation: denied",
+            )):
+                return True
+        elif isinstance(val, dict) and is_tool_confirmation_or_denial(val):
+            return True
+        elif isinstance(val, list):
+            for item in val:
+                if isinstance(item, dict) and is_tool_confirmation_or_denial(item):
+                    return True
+    return False
+
+
+def extract_tool_calls_from_event(event: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Extract tool call name and arguments from Antigravity tool events or step updates."""
+    if not isinstance(event, dict):
+        return []
+    extracted: list[dict[str, Any]] = []
+
+    def _process_candidate(cand: Any, default_name: str | None = None) -> None:
+        if not isinstance(cand, dict):
+            return
+        name = (
+            cand.get("name")
+            or cand.get("tool_name")
+            or cand.get("tool")
+            or cand.get("function")
+            or default_name
+        )
+        if isinstance(name, dict):
+            name = name.get("name")
+        if isinstance(name, str) and name.strip():
+            raw_args = (
+                cand.get("arguments")
+                or cand.get("args")
+                or cand.get("parameters")
+                or cand.get("input")
+                or {}
+            )
+            cid = cand.get("id") or cand.get("call_id") or ""
+            if isinstance(raw_args, str):
+                try:
+                    args_obj = json.loads(raw_args)
+                except (json.JSONDecodeError, TypeError):
+                    args_obj = {"raw": raw_args}
+            elif isinstance(raw_args, dict):
+                args_obj = dict(raw_args)
+            else:
+                args_obj = {}
+            extracted.append({
+                "id": str(cid) if cid else None,
+                "name": str(name).strip(),
+                "arguments": args_obj,
+            })
+
+    candidate_keys = (
+        "tool_call",
+        "tool_calls",
+        "tool",
+        "tools",
+        "tool_info",
+        "call",
+        "calls",
+        "tool_use",
+        "tool_uses",
+        "action",
+        "actions",
+    )
+
+    for key in candidate_keys:
+        val = event.get(key)
+        if isinstance(val, list):
+            for item in val:
+                _process_candidate(item)
+        elif isinstance(val, dict):
+            _process_candidate(val)
+
+    step_update = event.get("step_update")
+    if isinstance(step_update, dict):
+        step_tool_name = step_update.get("tool_name") or step_update.get("name")
+        for key in candidate_keys:
+            val = step_update.get(key)
+            if isinstance(val, list):
+                for item in val:
+                    _process_candidate(item, default_name=str(step_tool_name) if step_tool_name else None)
+            elif isinstance(val, dict):
+                _process_candidate(val, default_name=str(step_tool_name) if step_tool_name else None)
+
+        if not extracted and step_tool_name:
+            _process_candidate(step_update)
+
+        error_obj = step_update.get("error")
+        if isinstance(error_obj, dict):
+            err_msg = str(error_obj.get("message") or "")
+            cmd_match = re.search(r"user denied permission to run command:\s*\n?([^\n]+)", err_msg)
+            if not cmd_match:
+                cmd_match = re.search(r'permission check failed for command "(.*?)":', err_msg)
+            if cmd_match:
+                cmd_val = cmd_match.group(1).strip().replace('\\"', '"')
+                if extracted:
+                    for item in extracted:
+                        if not item.get("arguments") or not item["arguments"].get("command"):
+                            item["arguments"]["command"] = cmd_val
+                else:
+                    extracted.append({
+                        "id": None,
+                        "name": str(step_tool_name or "RunCommand"),
+                        "arguments": {"command": cmd_val},
+                    })
+
+    if not extracted and any(k in event for k in ("name", "tool_name")):
+        _process_candidate(event)
+
+    res_obj = event.get("result")
+    denied_actions = (
+        event.get("denied_actions")
+        or (res_obj.get("denied_actions") if isinstance(res_obj, dict) else None)
+    )
+    if isinstance(denied_actions, list) and not extracted:
+        for da in denied_actions:
+            if isinstance(da, dict):
+                t_name = da.get("display_name") or da.get("action")
+                if t_name:
+                    extracted.append({
+                        "id": None,
+                        "name": str(t_name),
+                        "arguments": {},
+                    })
+
+    return extracted
+
+
 def _is_allowed_tool_call(item: Any) -> bool:
     if isinstance(item, dict):
         name = str(
             item.get("name")
+            or item.get("tool_name")
             or item.get("function")
             or item.get("tool")
-            or item.get("tool_name")
             or ""
         ).strip().lower()
         if name in _ALLOWED_INTERNAL_TOOLS:
@@ -213,6 +402,8 @@ def _is_allowed_tool_call(item: Any) -> bool:
 
 
 def event_indicates_internal_tool(event: Mapping[str, Any]) -> bool:
+    if is_tool_confirmation_or_denial(event):
+        return False
     event_name = str(event.get("event") or event.get("type") or "").strip().lower()
     if event_name in _TOOL_EVENT_NAMES:
         if event_name in {"tool", "tool_call", "tool-call", "tool_use", "tool-use"}:
@@ -723,6 +914,10 @@ class AntigravityBackend:
         deadline = time.monotonic() + self.config.timeout_seconds
         result: dict[str, Any] = {}
         diagnostics = ""
+        accumulated_text_deltas: list[str] = []
+        intercepted_tool_calls: list[dict[str, Any]] = []
+        denial_detected = False
+        denial_tool_name: str | None = None
         try:
             stream_closed = False
             while not stream_closed:
@@ -748,10 +943,28 @@ class AntigravityBackend:
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     diagnostics = (diagnostics + line)[-2_000:]
+                    m = re.search(
+                        r"([A-Za-z0-9_]+)\s+tool confirmation:\s*soft-denied",
+                        line,
+                        re.IGNORECASE,
+                    )
+                    if m:
+                        denial_detected = True
+                        denial_tool_name = m.group(1)
+                    elif (
+                        "tool confirmation: soft-denied" in line.lower()
+                        or "confirmation: denied" in line.lower()
+                        or "user denied permission" in line.lower()
+                        or "permission check failed" in line.lower()
+                    ):
+                        denial_detected = True
                     continue
                 if not isinstance(event, dict):
                     continue
-                if self.config.enforce_tool_isolation and event_indicates_internal_tool(event):
+                if is_tool_confirmation_or_denial(event):
+                    denial_detected = True
+                    intercepted_tool_calls.extend(extract_tool_calls_from_event(event))
+                elif self.config.enforce_tool_isolation and event_indicates_internal_tool(event):
                     raise ToolIsolationError(
                         "Antigravity attempted internal tool activity; request aborted"
                     )
@@ -776,8 +989,13 @@ class AntigravityBackend:
                                     on_delta(str(text_delta))
                         else:
                             text_delta = step_update.get("text_delta")
-                            if text_delta and on_delta is not None:
-                                on_delta(str(text_delta))
+                            if text_delta:
+                                accumulated_text_deltas.append(str(text_delta))
+                                if on_delta is not None:
+                                    on_delta(str(text_delta))
+                        if is_tool_confirmation_or_denial(step_update):
+                            denial_detected = True
+                            intercepted_tool_calls.extend(extract_tool_calls_from_event(step_update))
                 elif event.get("event") in ("thought", "thinking", "reasoning", "reasoning_delta"):
                     thought = (
                         event.get("content")
@@ -789,6 +1007,14 @@ class AntigravityBackend:
                         on_reasoning_delta(str(thought))
                 if event.get("event") == "result" and isinstance(event.get("result"), dict):
                     result = dict(event["result"])
+                    if result.get("denied_actions"):
+                        denial_detected = True
+                        for da in result["denied_actions"]:
+                            if isinstance(da, dict) and not denial_tool_name:
+                                denial_tool_name = da.get("display_name") or da.get("action")
+                    if is_tool_confirmation_or_denial(result):
+                        denial_detected = True
+                        intercepted_tool_calls.extend(extract_tool_calls_from_event(result))
             return_code = process.wait(timeout=3)
         except BackendError:
             self._terminate(process)
@@ -801,7 +1027,7 @@ class AntigravityBackend:
                 self._terminate(process)
             writer.join(timeout=1)
             reader.join(timeout=1)
-            if process.stdout is not None:
+            if process.stdout is not None and hasattr(process.stdout, "close"):
                 process.stdout.close()
 
         if return_code != 0:
@@ -809,13 +1035,111 @@ class AntigravityBackend:
             raise BackendError(error[-500:])
         if not result:
             raise BackendProtocolError("Antigravity emitted no result event")
-        if is_false_success(result):
-            raise BackendProtocolError(
-                "Antigravity false-success: empty response with zero usage and duration"
-            )
         if result.get("status") != "SUCCESS":
             raise BackendError(str(result.get("error") or result.get("status") or "Antigravity failed")[-500:])
         response = str(result.get("response") or "").strip()
+        if not response:
+            if intercepted_tool_calls:
+                for tc in intercepted_tool_calls:
+                    if not tc.get("arguments") or tc["arguments"] == {}:
+                        tname = tc.get("name") or denial_tool_name or "RunCommand"
+                        cmd_m = (
+                            re.search(r"user denied permission to run command:\s*\n?([^\n]+)", diagnostics)
+                            or re.search(r'permission check failed for command "(.*?)":', diagnostics)
+                            or re.search(r"(?:command|CommandLine|cmd):\s*(.+)", diagnostics, re.IGNORECASE)
+                        )
+                        path_m = (
+                            re.search(r'permission check failed for (?:file|path)\s*\"?([^\":\n]+)\"?', diagnostics, re.IGNORECASE)
+                            or re.search(r"(?:path|AbsolutePath|filePath|targetFile):\s*(.+)", diagnostics, re.IGNORECASE)
+                        )
+                        if cmd_m and ("command" in tname.lower() or not path_m):
+                            tc["arguments"] = {"command": cmd_m.group(1).strip().strip("'\"").replace('\\"', '"')}
+                        elif path_m:
+                            tc["arguments"] = {"path": path_m.group(1).strip().strip("'\"")}
+
+                tool_call_tags: list[str] = []
+                for tc in intercepted_tool_calls:
+                    call_id = tc.get("id") or f"call_{uuid.uuid4().hex[:12]}"
+                    tname = tc.get("name") or "unknown_tool"
+                    targs = tc.get("arguments") or {}
+                    targs_str = (
+                        json.dumps(targs, ensure_ascii=False, separators=(",", ":"))
+                        if isinstance(targs, dict)
+                        else str(targs)
+                    )
+                    payload = {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": tname,
+                            "arguments": targs_str,
+                        },
+                    }
+                    tool_call_tags.append(
+                        f"<tool_call>{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}</tool_call>"
+                    )
+                prefix = "".join(accumulated_text_deltas).strip()
+                calls_joined = "\n".join(tool_call_tags)
+                response = f"{prefix}\n{calls_joined}".strip() if prefix else calls_joined
+                _LOG.info(
+                    "Recovered %d intercepted tool calls from Antigravity stream",
+                    len(intercepted_tool_calls),
+                )
+            elif accumulated_text_deltas:
+                response = "".join(accumulated_text_deltas).strip()
+                _LOG.info(
+                    "Recovered non-empty assistant response from %d accumulated stream deltas",
+                    len(accumulated_text_deltas),
+                )
+            elif denial_detected:
+                tname = denial_tool_name or "requested tool"
+                cmd_m = (
+                    re.search(r"user denied permission to run command:\s*\n?([^\n]+)", diagnostics)
+                    or re.search(r'permission check failed for command "(.*?)":', diagnostics)
+                    or re.search(r"(?:command|CommandLine|cmd):\s*(.+)", diagnostics, re.IGNORECASE)
+                )
+                path_m = (
+                    re.search(r'permission check failed for (?:file|path)\s*\"?([^\":\n]+)\"?', diagnostics, re.IGNORECASE)
+                    or re.search(r"(?:path|AbsolutePath|filePath|targetFile):\s*(.+)", diagnostics, re.IGNORECASE)
+                )
+                if cmd_m:
+                    cmd_val = cmd_m.group(1).strip().strip("'\"").replace('\\"', '"')
+                    effective_name = denial_tool_name or "RunCommand"
+                    payload = {
+                        "id": f"call_{uuid.uuid4().hex[:12]}",
+                        "type": "function",
+                        "function": {
+                            "name": effective_name,
+                            "arguments": json.dumps({"command": cmd_val}, separators=(",", ":")),
+                        },
+                    }
+                    response = f"<tool_call>{json.dumps(payload, separators=(',', ':'))}</tool_call>"
+                    _LOG.info("Recovered tool call for %s from denial diagnostics", effective_name)
+                elif path_m and denial_tool_name:
+                    path_val = path_m.group(1).strip().strip("'\"")
+                    payload = {
+                        "id": f"call_{uuid.uuid4().hex[:12]}",
+                        "type": "function",
+                        "function": {
+                            "name": denial_tool_name,
+                            "arguments": json.dumps({"path": path_val}, separators=(",", ":")),
+                        },
+                    }
+                    response = f"<tool_call>{json.dumps(payload, separators=(',', ':'))}</tool_call>"
+                    _LOG.info("Recovered tool call for %s from denial diagnostics", denial_tool_name)
+                else:
+                    response = (
+                        f"I attempted to execute {tname}, but internal tool execution is restricted "
+                        "in plan mode. Please execute this tool directly via Hermes."
+                    )
+                    _LOG.info(
+                        "Recovered assistant message from detected tool denial for %s", tname
+                    )
+
+        if not response and is_false_success(result):
+            raise BackendProtocolError(
+                "Antigravity false-success: empty response with zero usage and duration"
+            )
         if not response:
             raise BackendProtocolError("Antigravity returned an empty response")
 
@@ -859,7 +1183,7 @@ class AntigravityBackend:
                     result = self._run_attempt(prompt, model, Path(request_dir), effort=effort)
                 except BackendError as exc:
                     last_error = exc
-                    transient = any(marker in str(exc).lower() for marker in _TRANSIENT_MARKERS)
+                    transient = is_transient_backend_error(exc)
                     if transient and attempt < self.config.max_attempts:
                         time.sleep(min(1.5 * attempt, 5.0))
                         continue
@@ -972,7 +1296,7 @@ class AntigravityBackend:
                     last_error = exc
                     if yielded_chunks > 0:
                         raise
-                    transient = any(marker in str(exc).lower() for marker in _TRANSIENT_MARKERS)
+                    transient = is_transient_backend_error(exc)
                     if transient and attempt < self.config.max_attempts:
                         time.sleep(min(1.5 * attempt, 5.0))
                         continue

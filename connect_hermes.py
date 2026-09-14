@@ -463,6 +463,7 @@ timeout_seconds = 300
 sandbox = true
 mode = "plan"
 enforce_tool_isolation = true
+max_attempts = 1
 validated_versions = ["1.1.17", "1.1.28", "1.2.0", "1.2.1", "1.2.2"]
 allow_unvalidated_versions = false
 sync_user_credentials = {sync_str}

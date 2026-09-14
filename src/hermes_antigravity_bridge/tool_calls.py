@@ -232,6 +232,52 @@ def _find_tool_call_boundary(text: str, inner_start: int) -> tuple[int, int, boo
     return n, n, False
 
 
+def _align_tool_arguments(clean_name: str, parsed_arguments: dict[str, Any]) -> None:
+    lowered = clean_name.lower().replace("-", "").replace("_", "")
+    is_command_tool = lowered in {"terminal", "bash", "shell", "exec", "runcommand", "command"}
+    if is_command_tool and "command" not in parsed_arguments:
+        cmd_val = (
+            parsed_arguments.get("CommandLine")
+            or parsed_arguments.get("commandLine")
+            or parsed_arguments.get("cmd")
+            or parsed_arguments.get("script")
+        )
+        if cmd_val is not None:
+            parsed_arguments["command"] = cmd_val
+
+    is_file_tool = lowered in {
+        "readfile",
+        "viewfile",
+        "writefile",
+        "writetofile",
+        "createfile",
+        "replacefilecontent",
+    }
+    if is_file_tool:
+        if "path" not in parsed_arguments:
+            path_val = (
+                parsed_arguments.get("AbsolutePath")
+                or parsed_arguments.get("filePath")
+                or parsed_arguments.get("targetFile")
+                or parsed_arguments.get("TargetFile")
+                or parsed_arguments.get("file_path")
+                or parsed_arguments.get("filename")
+                or parsed_arguments.get("file")
+            )
+            if path_val is not None:
+                parsed_arguments["path"] = path_val
+
+        if lowered in {"writefile", "writetofile", "createfile"} and "content" not in parsed_arguments:
+            content_val = (
+                parsed_arguments.get("CodeContent")
+                or parsed_arguments.get("codeContent")
+                or parsed_arguments.get("text")
+                or parsed_arguments.get("data")
+            )
+            if content_val is not None:
+                parsed_arguments["content"] = content_val
+
+
 def parse_tool_calls(
     text: str,
     *,
@@ -306,6 +352,33 @@ def parse_tool_calls(
                 clean_name = stripped
 
         if clean_name not in allowed_tool_names:
+            for cand in allowed_tool_names:
+                if cand.lower() == clean_name.lower():
+                    clean_name = cand
+                    break
+
+        if clean_name not in allowed_tool_names:
+            clean_simplified = clean_name.lower().replace("_", "").replace("-", "")
+            for cand in allowed_tool_names:
+                if cand.lower().replace("_", "").replace("-", "") == clean_simplified:
+                    clean_name = cand
+                    break
+
+        if clean_name not in allowed_tool_names:
+            synonym_groups = [
+                {"run_command", "terminal", "bash", "shell", "exec", "runcommand", "command"},
+                {"read_file", "view_file", "readfile", "viewfile"},
+                {"write_file", "write_to_file", "writefile", "writetofile"},
+            ]
+            c_low = clean_name.lower()
+            for group in synonym_groups:
+                if c_low in group:
+                    match = next((cand for cand in allowed_tool_names if cand.lower() in group), None)
+                    if match:
+                        clean_name = match
+                        break
+
+        if clean_name not in allowed_tool_names:
             if mode == "strict":
                 raise InvalidToolCall(f"tool '{clean_name}' was not advertised by Hermes")
             _LOG.warning(
@@ -337,6 +410,8 @@ def parse_tool_calls(
                     raise InvalidToolCall("tool-call arguments must decode to a JSON object")
                 _LOG.warning("Tool-call arguments do not decode to a JSON object; skipping")
                 continue
+
+            _align_tool_arguments(clean_name, parsed_arguments)
             argument_text = json.dumps(parsed_arguments, ensure_ascii=False, separators=(",", ":"))
             if len(argument_text) > _MAX_ARGUMENT_CHARS:
                 if mode == "strict":
@@ -344,7 +419,9 @@ def parse_tool_calls(
                 _LOG.warning("Tool-call arguments exceed size limit; skipping")
                 continue
         elif isinstance(arguments, dict):
-            argument_text = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
+            parsed_arguments = dict(arguments)
+            _align_tool_arguments(clean_name, parsed_arguments)
+            argument_text = json.dumps(parsed_arguments, ensure_ascii=False, separators=(",", ":"))
             if len(argument_text) > _MAX_ARGUMENT_CHARS:
                 if mode == "strict":
                     raise InvalidToolCall("tool-call arguments exceed the configured limit")

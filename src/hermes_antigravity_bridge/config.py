@@ -98,7 +98,7 @@ class AntigravityConfig:
     )
     runtime_dir: Path = field(default_factory=_default_runtime_dir)
     model_cache_ttl_seconds: int = 60
-    max_attempts: int = 3
+    max_attempts: int = 1
     validated_versions: tuple[str, ...] = (
         "1.1.17",
         "1.1.26",
@@ -389,7 +389,7 @@ class BridgeConfig:
                 maximum=3_600,
             ),
             max_attempts=_as_int(
-                agy_raw.get("max_attempts", 3),
+                env.get("AGY_MAX_ATTEMPTS", agy_raw.get("max_attempts", 1)),
                 name="antigravity.max_attempts",
                 minimum=1,
                 maximum=5,

@@ -108,7 +108,7 @@ class PromptPolicyTests(unittest.TestCase):
         ])
         self.assertIn("What is in this picture?", prompt)
         self.assertIn("[Attached image file:", prompt)
-        self.assertIn("- use view_file to inspect this image]", prompt)
+        self.assertNotIn("- use view_file", prompt)
         self.assertNotIn("data:image/png", prompt)
 
     def test_multimodal_local_file_path(self):
@@ -125,8 +125,9 @@ class PromptPolicyTests(unittest.TestCase):
                 ],
             }
         ])
-        self.assertIn(f"[Attached video file: {safe_media} - use view_file to inspect this video]", prompt)
-        self.assertIn(f"[Attached audio file: {safe_proj} - use view_file to inspect this audio]", prompt)
+        self.assertIn(f"[Attached video file: {safe_media}]", prompt)
+        self.assertIn(f"[Attached audio file: {safe_proj}]", prompt)
+        self.assertNotIn("use view_file", prompt)
 
     def test_multimodal_sensitive_host_path_is_sandboxed(self):
         prompt = self.builder.build([
@@ -139,7 +140,7 @@ class PromptPolicyTests(unittest.TestCase):
                 ],
             }
         ])
-        self.assertNotIn("use view_file to inspect this file", prompt)
+        self.assertNotIn("use view_file", prompt)
         self.assertIn("restricted host path; omitted for security", prompt)
 
     def test_multimodal_file_uri_normalization(self):
@@ -159,7 +160,8 @@ class PromptPolicyTests(unittest.TestCase):
                     ],
                 }
             ])
-            self.assertIn(f"[Attached image file: {media_path} - use view_file to inspect this image]", prompt)
+            self.assertIn(f"[Attached image file: {media_path}]", prompt)
+            self.assertNotIn("use view_file", prompt)
             self.assertNotIn("//home/", prompt)
             self.assertNotIn("//C:/", prompt)
 
@@ -180,7 +182,8 @@ class PromptPolicyTests(unittest.TestCase):
         with patch("hermes_antigravity_bridge.prompt.primitives._is_safe_media_path", return_value=True):
             for uri in posix_uris:
                 tag = _process_media_item({"type": "video_url", "video_url": {"url": uri}})
-                self.assertIn(f"[Attached video file: {posix_target} - use view_file to inspect this video]", tag)
+                self.assertIn(f"[Attached video file: {posix_target}]", tag)
+                self.assertNotIn("use view_file", tag)
                 self.assertNotIn("//home/", tag)
 
 

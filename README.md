@@ -28,7 +28,7 @@
 
 ## ⚡ Key Capabilities
 
-* 🧠 **1,000,000-Token Native Context**: Massive 4,000,000-character prompt budget for large codebases, research papers, and deep conversational history without premature truncation.
+* 🧠 **1,000,000-Token Native Context**: Massive 4,000,000-character prompt budget matching Gemini's 1M context window for large codebases, research papers, and conversational transcripts without premature truncation.
 * ⚡ **Real-Time Token Streaming**: Subprocess `stream-json` bridge delivering low-latency Server-Sent Events (SSE) with instantaneous typewriter fluidity.
 * 🤖 **Multi-Model Catalog with Effort Control**: Native support and granular reasoning effort mapping (`low`, `medium`, `high`) for **Gemini 3.8/3.7/3.6 Flash**, **Gemini 3.1 Pro**, **Claude Sonnet 4.6 (Thinking)**, **Claude Opus 4.6 (Thinking)**, and **GPT-OSS 120B**.
 * 🔄 **Universal Multi-Persona Support**: Non-destructively preserves existing providers (OpenAI, Anthropic Claude, Groq, Ollama) as `fallback_providers`—switch anytime with `/model`! Existing `agy` users connect in 1 second; new users get complete zero-friction defaults.
@@ -39,6 +39,19 @@
 * 🛡️ **Hermes Cognitive Sovereignty & Fail-Closed Isolation**: Hermes is the sole, undisputed owner of `USER.md`, `MEMORY.md`, SQLite memory databases, and tool execution. Antigravity runs purely as an isolated, stateless reasoning engine (`--sandbox`, `--mode plan`, `toolPermission: strict`).
 * 📊 **Embedded Observability Dashboard**: Built-in glassmorphic web interface (`http://localhost:8765/dashboard`) and `/api/metrics` with zero external CDNs or frameworks.
 * 🌍 **Cross-Platform**: Verified and tested across Linux, macOS, Windows, and Android (Termux).
+
+---
+
+## 🎯 Scope, Architecture & Operational Reality
+
+To set clear operational expectations for production deployments, here is how the bridge functions within the Hermes ecosystem:
+
+* **Stateless Translation Bridge (Not an Execution Environment)**: The bridge acts exclusively as an OpenAI-compatible translation proxy (`/v1/chat/completions`) communicating with Google's Antigravity CLI via headless `stream-json`. It transforms prompts, budgets tokens, and streams response deltas.
+* **Hermes Owns Tool Execution**: The bridge does **not** execute user commands or tools on the host. When the underlying model emits tool calls (`<tool_call>`), the bridge translates them and hands them back to Hermes Agent runtime. Hermes prompts the user (or runs autonomously according to Hermes configuration) and executes the tools. Internal Antigravity CLI tools (`RunCommand`, `ViewFile`, `WriteToFile`, etc.) are strictly isolated and soft-denied/intercepted to prevent unexpected host modifications.
+* **Hermes Owns All Memory**: Long-term memory (`USER.md`, `MEMORY.md`), session state, and SQLite databases (`memory.db`) belong entirely to Hermes. The bridge is stateless across turns; each `/v1/chat/completions` request carries its required context within the prompt budget.
+* **Desktop & Browser Automation Boundary (CapCut, Browsers, GUI)**: Desktop automation workflows (e.g. CapCut video generation, browser navigation, process monitoring) are capabilities of **Hermes Agent skills** and external host supervisors, not features of the bridge server. The bridge purely supplies the LLM reasoning tokens driving those skills.
+* **1M Token Window & Latency Profile**: While the bridge configures a 4,000,000-character prompt budget matching Gemini's 1,000,000 token context window, upstream latency scales with prompt token volume. For massive repositories or multi-turn transcripts, initial Time-to-First-Token (TTFT) reflects Google DeepMind processing time.
+* **Resilient Fail-Fast Defaults**: Retries default to `max_attempts = 1` (`AGY_MAX_ATTEMPTS=1`) to prevent latency amplification storms. Upstream soft-denials or empty response strings are safely recovered into structured Hermes tool calls or diagnostic messages rather than returning HTTP 502 Bad Gateway errors.
 
 ---
 
@@ -292,11 +305,14 @@ See [SECURITY.md](SECURITY.md) and [docs/security-and-privacy.md](docs/security-
 ## 🧪 Verification & Testing
 
 ```bash
-# Run full test suite (73 passed, 2 skipped across 75 test cases)
-uv run --with pytest --with pytest-cov pytest
+# Run full test suite (187 passed, 2 skipped across 189 test cases)
+python -m pytest
 
 # Verify bytecode compilation
 python -m compileall -q src tests connect_hermes.py
+
+# Linting check
+ruff check .
 ```
 
 ---

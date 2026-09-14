@@ -26,6 +26,21 @@ When a listed Hermes tool is required, emit exactly one or more blocks in this f
 <tool_call>{"id":"call_unique","type":"function","function":{"name":"TOOL_NAME","arguments":{}}}</tool_call>
 When no tool is required, answer normally and emit no <tool_call> tag.
 """
+_TOOL_ISOLATION_PREAMBLE = """You are the model inside an existing Hermes Agent session.
+Hermes—not this bridge—owns memory, tools, session identity, and conversation history.
+Treat HERMES_SYSTEM_INSTRUCTIONS as authoritative.
+Use RECENT_CONVERSATION_JSONL only as ordered context.
+The final CURRENT_USER_REQUEST_JSON is the current request and overrides older topics.
+Never answer an older request merely because it is longer or more detailed.
+# Tool Call Rules
+When a listed Hermes tool is required, emit exactly one or more blocks in this form:
+<tool_call>{"id":"call_unique","type":"function","function":{"name":"TOOL_NAME","arguments":{}}}</tool_call>
+When no tool is required, answer normally and emit no <tool_call> tag.
+# Tool Isolation Rules
+You MUST NEVER attempt to invoke internal tools, functions, or agent capabilities directly (such as RunCommand, run_command, ViewFile, view_file, write_to_file, read_file, edit_file, browse, terminal, etc.).
+Any direct internal tool invocation will be rejected and denied by strict security policy.
+All tool operations MUST be emitted strictly as text output inside <tool_call>...</tool_call> tags for the Hermes client to execute.
+"""
 _SYSTEM_LABEL = "\n# HERMES_SYSTEM_INSTRUCTIONS\n"
 _TOOLS_LABEL = "\n# HERMES_TOOL_SCHEMAS_JSONL\n"
 _HISTORY_LABEL = "\n# RECENT_CONVERSATION_JSONL\n"
@@ -34,13 +49,24 @@ _FINAL_DIRECTIVE = (
     "\n# CURRENT_REQUEST_GUARD\n"
     "Answer CURRENT_USER_REQUEST_JSON, using the system instructions, memory, and recent context above."
 )
+_TOOL_ISOLATION_FINAL_DIRECTIVE = (
+    "\n# CURRENT_REQUEST_GUARD\n"
+    "Answer CURRENT_USER_REQUEST_JSON, using the system instructions, memory, and recent context above.\n"
+    "CRITICAL: Do not invoke internal CLI tools directly. If a tool is needed, output <tool_call> blocks strictly as text."
+)
 
 
 class HermesPromptBuilder:
     """Serialize Hermes context without taking ownership of memory or history."""
 
-    def __init__(self, *, max_tool_description_chars: int = 240) -> None:
+    def __init__(
+        self,
+        *,
+        max_tool_description_chars: int = 240,
+        enforce_tool_isolation: bool = False,
+    ) -> None:
         self.max_tool_description_chars = max_tool_description_chars
+        self.enforce_tool_isolation = enforce_tool_isolation
 
     def build(
         self,
@@ -62,18 +88,24 @@ class HermesPromptBuilder:
             ),
             len(messages) - 1,
         )
+        preamble = _TOOL_ISOLATION_PREAMBLE if self.enforce_tool_isolation else _PREAMBLE
+        final_directive = (
+            _TOOL_ISOLATION_FINAL_DIRECTIVE
+            if self.enforce_tool_isolation
+            else _FINAL_DIRECTIVE
+        )
         latest_message = messages[latest_user_index]
         latest_json = serialize_history_message(latest_message, compact_content=False)
         fixed_cost = sum(
             len(part)
             for part in (
-                _PREAMBLE,
+                preamble,
                 _SYSTEM_LABEL,
                 _TOOLS_LABEL,
                 _HISTORY_LABEL,
                 _LATEST_LABEL,
                 latest_json,
-                _FINAL_DIRECTIVE,
+                final_directive,
             )
         )
         if fixed_cost > max_chars:
@@ -148,7 +180,7 @@ class HermesPromptBuilder:
         history_budget = available - used_system - len(tools_text)
         history_text = recent_history(messages, latest_user_index, history_budget)
         prompt = (
-            _PREAMBLE
+            preamble
             + _SYSTEM_LABEL
             + system_text
             + _TOOLS_LABEL
@@ -157,7 +189,7 @@ class HermesPromptBuilder:
             + history_text
             + _LATEST_LABEL
             + latest_json
-            + _FINAL_DIRECTIVE
+            + final_directive
         )
         if len(prompt) > max_chars or latest_json not in prompt:
             raise RuntimeError("bridge context invariant failed: latest request was not preserved")

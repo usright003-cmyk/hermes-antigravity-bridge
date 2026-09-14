@@ -235,7 +235,7 @@ def _process_media_item(item: dict[str, Any]) -> str:
             file_path = media_dir / f"{kind}_{content_hash}{ext}"
             if not file_path.exists() or file_path.stat().st_size == 0:
                 file_path.write_bytes(raw_bytes)
-            return f"[Attached {kind} file: {file_path.as_posix()} - use view_file to inspect this {kind}]"
+            return f"[Attached {kind} file: {file_path.as_posix()}]"
         except Exception:  # noqa: BLE001
             return f"[Attached {kind}: data payload decode failed]"
 
@@ -264,7 +264,7 @@ def _process_media_item(item: dict[str, Any]) -> str:
         clean_file = Path(clean_path)
         clean_posix = _normalize_posix_path_str(clean_file.as_posix())
         if _is_safe_media_path(clean_file):
-            return f"[Attached {kind} file: {clean_posix} - use view_file to inspect this {kind}]"
+            return f"[Attached {kind} file: {clean_posix}]"
         return f"[Attached {kind} file: {clean_posix} (restricted host path; omitted for security)]"
 
     try:
@@ -292,13 +292,13 @@ def _process_media_item(item: dict[str, Any]) -> str:
         ):
             cand_posix = _normalize_posix_path_str(cand_path.as_posix())
             if _is_safe_media_path(cand_path):
-                return f"[Attached {kind} file: {cand_posix} - use view_file to inspect this {kind}]"
+                return f"[Attached {kind} file: {cand_posix}]"
             return f"[Attached {kind} file: {cand_posix} (restricted host path; omitted for security)]"
     except Exception:  # noqa: BLE001, S110
         pass
 
     if url_val.startswith(("http://", "https://")):
-        return f"[Attached {kind} URL: {url_val} - inspect if needed]"
+        return f"[Attached {kind} URL: {url_val}]"
 
     return f"[Attached {kind}: {url_val}]"
 

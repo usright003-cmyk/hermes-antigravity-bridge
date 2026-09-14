@@ -10,10 +10,27 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def find_bash():
+    candidates = [
+        shutil.which("bash"),
+        "C:/Program Files/Git/bin/bash.exe",
+        "C:/Program Files/Git/usr/bin/bash.exe",
+        "/bin/bash",
+        "/usr/bin/bash",
+    ]
+    for c in candidates:
+        if c and Path(c).exists():
+            return str(c)
+    return None
+
+
+BASH = find_bash()
+
+
 class LifecycleScriptTests(unittest.TestCase):
     def run_script(self, name, env, *args):
         completed = subprocess.run(
-            ["bash", str(ROOT / "scripts" / name), *args],
+            [BASH or "bash", str(ROOT / "scripts" / name), *args],
             cwd=ROOT,
             env=env,
             capture_output=True,
@@ -113,6 +130,141 @@ class LifecycleScriptTests(unittest.TestCase):
             self.assertTrue(settings.exists())
             self.assertEqual(agy_sentinel.read_bytes(), b"DO-NOT-DELETE-AGY")
             self.assertEqual(memory_sentinel.read_bytes(), b"DO-NOT-DELETE-HERMES")
+
+
+class HealthCheckAndLifecycleLogicTests(unittest.TestCase):
+    @unittest.skipUnless(BASH, "bash is required for script tests")
+    def test_hab_service_health_authenticated_ready_and_degraded(self):
+        import http.server
+        import threading
+        from typing import ClassVar
+
+        class MockBridge(http.server.BaseHTTPRequestHandler):
+            mode: ClassVar[str] = "ready"
+            received_auth: ClassVar[list[str | None]] = []
+
+            def do_GET(self):
+                if self.path == "/health":
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(b'{"status":"ok"}')
+                    return
+                if self.path == "/ready":
+                    auth = self.headers.get("Authorization")
+                    MockBridge.received_auth.append(auth)
+                    if auth != "Bearer secret-token-42":
+                        self.send_response(401)
+                        self.end_headers()
+                        self.wfile.write(b'{"detail":"Unauthorized"}')
+                        return
+                    if MockBridge.mode == "ready":
+                        self.send_response(200)
+                        self.end_headers()
+                        self.wfile.write(b'{"status":"ready","authenticated":true}')
+                    else:
+                        self.send_response(200)
+                        self.end_headers()
+                        self.wfile.write(b'{"status":"degraded","authenticated":false}')
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), MockBridge)
+        port = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever)
+        thread.daemon = True
+        thread.start()
+
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp)
+                token_file = tmp_path / "bridge.token"
+                token_file.write_text("secret-token-42\n")
+                config_file = tmp_path / "config.toml"
+                config_file.write_text(f'[server]\nhost = "127.0.0.1"\nport = {port}\n')
+
+                lib_path = (ROOT / "scripts/lib.sh").as_posix()
+
+                # Test 1: ready mode succeeds and sends Bearer token via stdin config
+                MockBridge.mode = "ready"
+                MockBridge.received_auth.clear()
+                cmd = f"""
+                source "{lib_path}"
+                export HAB_TOKEN_FILE="{token_file.as_posix()}"
+                export HAB_CONFIG_FILE="{config_file.as_posix()}"
+                export HAB_CURRENT_LINK="{tmp_path.as_posix()}"
+                hab_service_health
+                """
+                res = subprocess.run([BASH, "-c", cmd], capture_output=True, text=True, check=False)
+                self.assertEqual(res.returncode, 0, f"Expected success: {res.stderr}")
+                self.assertIn("Bearer secret-token-42", MockBridge.received_auth)
+
+                # Test 2: degraded status returns error code 1
+                MockBridge.mode = "degraded"
+                res = subprocess.run([BASH, "-c", cmd], capture_output=True, text=True, check=False)
+                self.assertEqual(res.returncode, 1)
+                self.assertIn("service status not ready", res.stderr)
+
+                # Test 3: wrong token returns error code 1
+                token_file.write_text("wrong-token\n")
+                res = subprocess.run([BASH, "-c", cmd], capture_output=True, text=True, check=False)
+                self.assertNotEqual(res.returncode, 0)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    @unittest.skipUnless(BASH, "bash is required for script tests")
+    def test_rollback_prerequisites_missing_previous(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            install_root = tmp_path / "hermes-antigravity-bridge"
+            install_root.mkdir()
+            current = install_root / "current"
+            current.mkdir()
+
+            env = dict(os.environ)
+            env.update({
+                "HOME": str(tmp_path),
+                "HAB_INSTALL_ROOT": str(install_root),
+                "HAB_SKIP_SERVICE": "1",
+            })
+            res = subprocess.run(
+                [BASH, str(ROOT / "scripts/rollback.sh")],
+                cwd=ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(res.returncode, 1)
+            self.assertIn("cannot rollback: no previous release found", res.stderr)
+
+    @unittest.skipUnless(BASH, "bash is required for script tests")
+    def test_rollback_prerequisites_missing_current(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            install_root = tmp_path / "hermes-antigravity-bridge"
+            install_root.mkdir()
+
+            env = dict(os.environ)
+            env.update({
+                "HOME": str(tmp_path),
+                "HAB_INSTALL_ROOT": str(install_root),
+                "HAB_SKIP_SERVICE": "1",
+            })
+            res = subprocess.run(
+                [BASH, str(ROOT / "scripts/rollback.sh")],
+                cwd=ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(res.returncode, 1)
+            self.assertIn("no active release found", res.stderr)
 
 
 if __name__ == "__main__":

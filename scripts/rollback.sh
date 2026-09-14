@@ -31,3 +31,4 @@ if [[ "$HAB_SKIP_SERVICE" != "1" ]]; then
     fi
 fi
 printf 'current=%s\nprevious=%s\n' "$previous" "$current"
+printf '%s\n' 'Remember to restart Hermes Gateway: systemctl --user restart hermes-gateway.service'

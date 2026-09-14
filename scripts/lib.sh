@@ -17,7 +17,13 @@ HAB_RELEASES_DIR="${HAB_RELEASES_DIR:-$HAB_INSTALL_ROOT/releases}"
 HAB_RUNTIME_DIR="${HAB_RUNTIME_DIR:-$HAB_INSTALL_ROOT/runtime}"
 HAB_AGY_HOME="${HAB_AGY_HOME:-$HOME/.local/state/$HAB_APP_NAME/agy-home}"
 HAB_AGY_SETTINGS="${HAB_AGY_SETTINGS:-$HAB_AGY_HOME/.gemini/antigravity-cli/settings.json}"
-HAB_PYTHON_BIN="${HAB_PYTHON_BIN:-$(command -v python3 || command -v python || true)}"
+if [[ -n "${HAB_PYTHON_BIN:-}" ]]; then
+    if command -v "$HAB_PYTHON_BIN" >/dev/null 2>&1; then
+        HAB_PYTHON_BIN="$(command -v "$HAB_PYTHON_BIN")"
+    fi
+else
+    HAB_PYTHON_BIN="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
+fi
 hab_detect_uv() {
     if [[ -n "${HAB_UV_BIN:-}" ]]; then
         printf '%s\n' "$HAB_UV_BIN"
@@ -62,12 +68,16 @@ hab_atomic_link() {
 hab_current_target() {
     if [[ -L "$HAB_CURRENT_LINK" ]]; then
         readlink -f "$HAB_CURRENT_LINK"
+    elif [[ -d "$HAB_CURRENT_LINK" ]]; then
+        (cd "$HAB_CURRENT_LINK" && pwd -P)
     fi
 }
 
 hab_previous_target() {
     if [[ -L "$HAB_PREVIOUS_LINK" ]]; then
         readlink -f "$HAB_PREVIOUS_LINK"
+    elif [[ -d "$HAB_PREVIOUS_LINK" ]]; then
+        (cd "$HAB_PREVIOUS_LINK" && pwd -P)
     fi
 }
 
@@ -86,6 +96,8 @@ hab_service_health() {
     fi
 
     token="$(tr -d '\r\n' < "$HAB_TOKEN_FILE")"
+    token="${token//\"/}"
+    token="$(printf '%s' "$token" | xargs)"
     if [[ -z "$token" ]]; then
         [[ "$restore_xtrace" == "1" ]] && set -x
         hab_die "token file is empty: $HAB_TOKEN_FILE"
@@ -93,9 +105,13 @@ hab_service_health() {
 
     local py_bin="$HAB_CURRENT_LINK/venv/bin/python"
     if [[ ! -x "$py_bin" ]]; then
-        py_bin="$HAB_PYTHON_BIN"
+        if [[ -n "$HAB_PYTHON_BIN" ]] && command -v "$HAB_PYTHON_BIN" >/dev/null 2>&1; then
+            py_bin="$(command -v "$HAB_PYTHON_BIN")"
+        else
+            py_bin=""
+        fi
     fi
-    if [[ ! -x "$py_bin" ]]; then
+    if [[ -z "$py_bin" || ! -x "$py_bin" ]]; then
         unset token
         [[ "$restore_xtrace" == "1" ]] && set -x
         hab_die "python interpreter not found for health check"
@@ -110,6 +126,7 @@ hab_service_health() {
     if ! read -r host port < <(
         "$py_bin" - "$HAB_CONFIG_FILE" <<'PY'
 import sys
+host, port = "127.0.0.1", 8765
 try:
     try:
         import tomllib
@@ -118,11 +135,30 @@ try:
     with open(sys.argv[1], "rb") as f:
         data = tomllib.load(f)
     server = data.get("server", {})
-    print(server.get("host", "127.0.0.1"), server.get("port", 8765))
+    host = server.get("host", host)
+    port = server.get("port", port)
 except Exception:
-    from hermes_antigravity_bridge.config import BridgeConfig
-    config = BridgeConfig.load(sys.argv[1])
-    print(config.server.host, config.server.port)
+    try:
+        from hermes_antigravity_bridge.config import BridgeConfig
+        config = BridgeConfig.load(sys.argv[1])
+        host, port = config.server.host, config.server.port
+    except Exception:
+        try:
+            in_server = False
+            with open(sys.argv[1], "r", encoding="utf-8") as f:
+                for line in f:
+                    s = line.split("#", 1)[0].strip()
+                    if s.startswith("[") and s.endswith("]"):
+                        in_server = (s == "[server]")
+                    elif in_server and "=" in s:
+                        k, v = [x.strip() for x in s.split("=", 1)]
+                        if k == "host":
+                            host = v.strip("\"'")
+                        elif k == "port":
+                            port = v.strip("\"'")
+        except Exception:
+            pass
+print(host, port)
 PY
     ); then
         unset token
@@ -157,8 +193,23 @@ PY
         return 1
     fi
 
-    if ! (printf 'header = "Authorization: Bearer %s"\n' "$token" | \
-        curl -fsS --max-time 35 -K - "http://$host:$port/ready" >/dev/null); then
+    local ready_output healthy_ready=0
+    for _ in {1..3}; do
+        if ready_output="$(printf 'header = "Authorization: Bearer %s"\n' "$token" | \
+            curl -fsS --max-time 35 -K - "http://$host:$port/ready" 2>/dev/null)"; then
+            if [[ "$ready_output" == *'"status":"ready"'* || "$ready_output" == *'"status": "ready"'* ]]; then
+                healthy_ready=1
+                break
+            fi
+        fi
+        sleep 1
+    done
+    if [[ "$healthy_ready" != "1" ]]; then
+        if [[ -n "${ready_output:-}" ]]; then
+            printf 'error: readiness check failed (service status not ready): %s\n' "$ready_output" >&2
+        else
+            printf 'error: readiness check failed (endpoint unreachable or unauthorized)\n' >&2
+        fi
         unset token
         [[ "$restore_xtrace" == "1" ]] && set -x
         return 1

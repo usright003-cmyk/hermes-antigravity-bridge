@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import re
@@ -22,6 +23,54 @@ _MAX_BLOCK_CHARS = 65_536
 _MAX_ARGUMENT_CHARS = 65_536
 
 
+def _safe_eval_python_mapping(s: str) -> dict[str, Any] | None:
+    try:
+        tree = ast.parse(s, mode="eval")
+    except (SyntaxError, MemoryError, RecursionError, ValueError):
+        return None
+
+    def _eval_node(node: ast.AST) -> Any:
+        if isinstance(node, ast.Expression):
+            return _eval_node(node.body)
+        if isinstance(node, ast.Dict):
+            res = {}
+            for k, v in zip(node.keys, node.values):
+                if k is None:
+                    continue
+                key_val = _eval_node(k)
+                if not isinstance(key_val, (str, int, float, bool)):
+                    raise TypeError("invalid key type")
+                res[str(key_val)] = _eval_node(v)
+            return res
+        if isinstance(node, ast.List):
+            return [_eval_node(elt) for elt in node.elts]
+        if isinstance(node, ast.Tuple):
+            return [_eval_node(elt) for elt in node.elts]
+        if isinstance(node, ast.Constant):
+            return node.value
+        if isinstance(node, ast.Name):
+            lowered = node.id.lower()
+            if lowered in ("true",):
+                return True
+            if lowered in ("false",):
+                return False
+            if lowered in ("null", "none"):
+                return None
+            raise ValueError(f"unsupported name: {node.id}")
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+            val = _eval_node(node.operand)
+            return +val if isinstance(node.op, ast.UAdd) else -val
+        raise ValueError(f"unsupported AST node: {type(node)}")
+
+    try:
+        result = _eval_node(tree)
+        if isinstance(result, dict):
+            return result
+    except (ValueError, TypeError, RecursionError):
+        pass
+    return None
+
+
 def _repair_json_string(raw: str) -> str:
     """Best-effort cleanup of common JSON malformations from LLM output.
 
@@ -30,9 +79,13 @@ def _repair_json_string(raw: str) -> str:
     """
     s = raw.strip()
     # Strip markdown code fences if present
-    s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"^```(?:json|python|py)?\s*", "", s, flags=re.IGNORECASE)
     s = re.sub(r"\s*```$", "", s)
     s = s.strip()
+
+    mapping_res = _safe_eval_python_mapping(s)
+    if mapping_res is not None:
+        return json.dumps(mapping_res, ensure_ascii=False)
 
     result: list[str] = []
     in_string = False
@@ -284,6 +337,7 @@ def parse_tool_calls(
     allowed_tool_names: Collection[str],
     id_factory: Callable[[], str] | None = None,
     mode: str = "compatible",
+    strip_unparsed_tags: bool = False,
 ) -> ParsedAssistantOutput:
     if not isinstance(text, str) or not text.strip():
         return ParsedAssistantOutput(text="")
@@ -291,6 +345,7 @@ def parse_tool_calls(
     make_id = id_factory or (lambda: f"call_{uuid.uuid4().hex}")
     calls: list[dict[str, Any]] = []
     spans: list[tuple[int, int]] = []
+    unparsed_spans: list[tuple[int, int]] = []
     has_tag = False
 
     pos = 0
@@ -316,6 +371,8 @@ def parse_tool_calls(
             if mode == "strict":
                 raise InvalidToolCall("tool-call payload exceeds the configured limit")
             _LOG.warning("Tool call block length (%d) exceeds limit; skipping", len(block_content))
+            if strip_unparsed_tags:
+                unparsed_spans.append((tag_start, tag_end))
             pos = max(tag_end, inner_start + 1)
             continue
 
@@ -327,6 +384,8 @@ def parse_tool_calls(
                 "Malformed tool-call block payload (length=%d, mode=compatible); keeping as assistant text",
                 len(block_content),
             )
+            if strip_unparsed_tags:
+                unparsed_spans.append((tag_start, tag_end))
             pos = max(tag_end, inner_start + 1)
             continue
 
@@ -343,6 +402,7 @@ def parse_tool_calls(
             if mode == "strict":
                 raise InvalidToolCall("tool-call name is missing or invalid")
             _LOG.warning("Tool-call name is missing or invalid; skipping call")
+            unparsed_spans.append((tag_start, tag_end))
             continue
 
         clean_name = name.strip()
@@ -385,6 +445,7 @@ def parse_tool_calls(
             _LOG.warning(
                 "Model requested unadvertised tool '%s' (mode=compatible); skipping", clean_name
             )
+            unparsed_spans.append((tag_start, tag_end))
             continue
 
         # Extract arguments
@@ -395,6 +456,7 @@ def parse_tool_calls(
                 if mode == "strict":
                     raise InvalidToolCall("tool-call arguments exceed the configured limit")
                 _LOG.warning("Tool-call arguments exceed size limit; skipping")
+                unparsed_spans.append((tag_start, tag_end))
                 continue
             try:
                 parsed_arguments = json.loads(arguments)
@@ -405,11 +467,13 @@ def parse_tool_calls(
                     if mode == "strict":
                         raise InvalidToolCall("tool-call arguments are not valid JSON") from exc
                     _LOG.warning("Tool-call arguments are not valid JSON; skipping")
+                    unparsed_spans.append((tag_start, tag_end))
                     continue
             if not isinstance(parsed_arguments, dict):
                 if mode == "strict":
                     raise InvalidToolCall("tool-call arguments must decode to a JSON object")
                 _LOG.warning("Tool-call arguments do not decode to a JSON object; skipping")
+                unparsed_spans.append((tag_start, tag_end))
                 continue
 
             _align_tool_arguments(clean_name, parsed_arguments)
@@ -418,6 +482,7 @@ def parse_tool_calls(
                 if mode == "strict":
                     raise InvalidToolCall("tool-call arguments exceed the configured limit")
                 _LOG.warning("Tool-call arguments exceed size limit; skipping")
+                unparsed_spans.append((tag_start, tag_end))
                 continue
         elif isinstance(arguments, dict):
             parsed_arguments = dict(arguments)
@@ -427,6 +492,7 @@ def parse_tool_calls(
                 if mode == "strict":
                     raise InvalidToolCall("tool-call arguments exceed the configured limit")
                 _LOG.warning("Tool-call arguments exceed size limit; skipping")
+                unparsed_spans.append((tag_start, tag_end))
                 continue
         elif arguments is None:
             argument_text = "{}"
@@ -434,6 +500,7 @@ def parse_tool_calls(
             if mode == "strict":
                 raise InvalidToolCall("tool-call arguments must be a JSON object or object string")
             _LOG.warning("Tool-call arguments invalid type; skipping")
+            unparsed_spans.append((tag_start, tag_end))
             continue
 
         call_id = payload.get("id") or make_id()
@@ -452,12 +519,18 @@ def parse_tool_calls(
         )
         spans.append((tag_start, tag_end))
 
+    all_spans = sorted(spans + unparsed_spans, key=lambda x: x[0], reverse=True)
     if not calls:
         if has_tag and allowed_tool_names and mode == "strict":
             raise InvalidToolCall("model emitted a malformed tool-call block")
+        if unparsed_spans:
+            cleaned = text
+            for start, end in all_spans:
+                cleaned = cleaned[:start] + cleaned[end:]
+            return ParsedAssistantOutput(text=cleaned.strip())
         return ParsedAssistantOutput(text=text.strip())
 
     cleaned = text
-    for start, end in reversed(spans):
+    for start, end in all_spans:
         cleaned = cleaned[:start] + cleaned[end:]
     return ParsedAssistantOutput(text=cleaned.strip(), tool_calls=tuple(calls))

@@ -53,6 +53,7 @@ _TRANSIENT_MARKERS = (
     "temporar",
     "subscriber fell behind",
     "connection to the agent was interrupted",
+    "improperly formatted function call",
 )
 
 
@@ -545,6 +546,8 @@ class AntigravityBackend:
         for var in ("XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"):
             env.pop(var, None)
         env.setdefault("NO_COLOR", "1")
+        env["PYTHONUTF8"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
         return env
 
     def _ensure_runtime(self) -> Path:

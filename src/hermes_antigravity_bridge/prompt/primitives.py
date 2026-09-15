@@ -10,7 +10,7 @@ import os
 import re
 import tempfile
 import time
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -423,17 +423,58 @@ def message_text(message: dict[str, Any]) -> str:
     return content
 
 
+def compact_tool_output(content: str) -> str:
+    """Smart head-and-tail compaction for older historical tool outputs exceeding 1500 chars."""
+    if len(content) <= 1500:
+        return content
+    omitted_len = len(content) - 1000
+    marker = f"\n[... bridge compacted {omitted_len} characters of earlier tool output ...]\n"
+    return content[:600] + marker + content[-400:]
+
+
 def serialize_history_message(
     message: dict[str, Any],
     limit: int | None = None,
     *,
     compact_content: bool = True,
+    is_older_tool: bool = False,
+    compact_older_tool: bool = False,
+    is_older_turn: bool = False,
+    compact_tool_output_flag: bool = False,
 ) -> str:
     content = message_text(message)
+    role = str(message.get("role") or "user")
+
+    # Sanitize unparsed or dangling tool_call tags from historical assistant messages
+    if role.lower() == "assistant" and "<tool_call" in content.lower():
+        content = re.sub(
+            r"<tool_call(?:\s+[^>]*)?>.*?</tool_call\s*>",
+            "",
+            content,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        content = re.sub(r"</?tool_call(?:\s+[^>]*)?>", "", content, flags=re.IGNORECASE)
+        content = content.strip()
+
+    # Smart head-and-tail compaction for older tool messages
+    should_compact_tool = (
+        role.lower() == "tool"
+        and (
+            is_older_tool
+            or compact_older_tool
+            or is_older_turn
+            or compact_tool_output_flag
+            or bool(message.get("is_older_tool"))
+            or bool(message.get("is_older_turn"))
+        )
+    )
+    if should_compact_tool and compact_content:
+        content = compact_tool_output(content)
+
     if compact_content:
         content = compact_non_latest_text(content)
     payload: dict[str, Any] = {
-        "role": str(message.get("role") or "user"),
+        "role": role,
         "content": content,
     }
     if message.get("tool_name") or message.get("name"):
@@ -459,16 +500,23 @@ def serialize_history_message(
 
 
 def recent_history(
-    messages: Sequence[dict[str, Any]], latest_user_index: int, budget: int
+    messages: Sequence[dict[str, Any]],
+    latest_user_index: int | Collection[int],
+    budget: int,
 ) -> str:
     if budget <= 0:
         return ""
-    candidates = [
-        message
+    if isinstance(latest_user_index, int):
+        excluded: set[int] = {latest_user_index}
+    else:
+        excluded = set(latest_user_index)
+    candidate_indices = [
+        index
         for index, message in enumerate(messages)
-        if index != latest_user_index
+        if index not in excluded
         and str(message.get("role") or "").lower() not in {"system", "developer"}
     ]
+    candidates = [messages[index] for index in candidate_indices]
     if not candidates:
         return ""
     marker = json.dumps(
@@ -477,7 +525,20 @@ def recent_history(
         separators=(",", ":"),
     )
     marker_len = len(marker)
-    all_blocks = [serialize_history_message(message) for message in candidates]
+
+    tool_indices_in_messages = [
+        i for i, m in enumerate(messages)
+        if str(m.get("role") or "").lower() == "tool"
+    ]
+    recent_tool_indices = set(tool_indices_in_messages[-2:])
+
+    def _serialize_candidate(idx: int, lim: int | None = None) -> str:
+        msg = messages[idx]
+        is_tool = str(msg.get("role") or "").lower() == "tool"
+        msg_is_older = is_tool and (idx not in recent_tool_indices)
+        return serialize_history_message(msg, lim, is_older_tool=msg_is_older)
+
+    all_blocks = [_serialize_candidate(idx) for idx in candidate_indices]
     all_cost = sum(len(block) for block in all_blocks) + max(0, len(all_blocks) - 1)
     if all_cost <= budget:
         return "\n".join(all_blocks)
@@ -485,15 +546,15 @@ def recent_history(
     if remaining <= 0:
         return marker if marker_len <= budget else ""
     selected: list[str] = []
-    for message in reversed(candidates):
-        block = serialize_history_message(message)
+    for idx in reversed(candidate_indices):
+        block = _serialize_candidate(idx)
         cost = len(block) + (1 if selected else 0)
         if cost <= remaining:
             selected.append(block)
             remaining -= cost
             continue
         if not selected:
-            clipped = serialize_history_message(message, remaining)
+            clipped = _serialize_candidate(idx, remaining)
             if clipped:
                 selected.append(clipped)
                 remaining -= len(clipped)

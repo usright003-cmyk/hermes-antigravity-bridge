@@ -54,6 +54,7 @@ _SYSTEM_LABEL = "\n# HERMES_SYSTEM_INSTRUCTIONS\n"
 _TOOLS_LABEL = "\n# HERMES_TOOL_SCHEMAS_JSONL\n"
 _HISTORY_LABEL = "\n# RECENT_CONVERSATION_JSONL\n"
 _LATEST_LABEL = "\n# CURRENT_USER_REQUEST_JSON\n"
+_TOOL_OUTPUT_LABEL = "\n# LATEST_TOOL_OUTPUT\n"
 _FINAL_DIRECTIVE = (
     "\n# CURRENT_REQUEST_GUARD\n"
     "Answer CURRENT_USER_REQUEST_JSON, using the system instructions, memory, and recent context above."
@@ -61,6 +62,19 @@ _FINAL_DIRECTIVE = (
 _TOOL_ISOLATION_FINAL_DIRECTIVE = (
     "\n# CURRENT_REQUEST_GUARD\n"
     "Answer CURRENT_USER_REQUEST_JSON, using the system instructions, memory, and recent context above.\n"
+    "CRITICAL: Do not invoke internal CLI tools directly. If a tool is needed, output <tool_call> blocks strictly as text.\n"
+    "For user uploaded images or video frames, inspect the visual media directly using native vision without terminal commands.\n"
+    "For image requests, use Google Antigravity's native generate_image tool directly rather than writing Python scripts."
+)
+_TOOL_FINAL_DIRECTIVE = (
+    "\n# CURRENT_REQUEST_GUARD\n"
+    "Hermes has executed the requested tool(s) and returned the result above. "
+    "Synthesize the tool result above to formulate the next step or final answer for the user."
+)
+_TOOL_ISOLATION_TOOL_FINAL_DIRECTIVE = (
+    "\n# CURRENT_REQUEST_GUARD\n"
+    "Hermes has executed the requested tool(s) and returned the result above. "
+    "Synthesize the tool result above to formulate the next step or final answer for the user.\n"
     "CRITICAL: Do not invoke internal CLI tools directly. If a tool is needed, output <tool_call> blocks strictly as text.\n"
     "For user uploaded images or video frames, inspect the visual media directly using native vision without terminal commands.\n"
     "For image requests, use Google Antigravity's native generate_image tool directly rather than writing Python scripts."
@@ -91,22 +105,46 @@ class HermesPromptBuilder:
         if max_chars < 4_096:
             raise InvalidRequest("prompt budget must be at least 4096 characters")
 
-        latest_user_index = next(
-            (
-                index
-                for index in range(len(messages) - 1, -1, -1)
-                if str(messages[index].get("role") or "").lower() == "user"
-            ),
-            len(messages) - 1,
-        )
+        is_tool_turn = str(messages[-1].get("role") or "").lower() == "tool"
+        if is_tool_turn:
+            latest_indices: list[int] = []
+            for index in range(len(messages) - 1, -1, -1):
+                if str(messages[index].get("role") or "").lower() == "tool":
+                    latest_indices.append(index)
+                else:
+                    break
+            latest_indices.reverse()
+            latest_label = _TOOL_OUTPUT_LABEL
+            final_directive = (
+                _TOOL_ISOLATION_TOOL_FINAL_DIRECTIVE
+                if self.enforce_tool_isolation
+                else _TOOL_FINAL_DIRECTIVE
+            )
+            latest_json = "\n".join(
+                serialize_history_message(messages[idx], compact_content=False)
+                for idx in latest_indices
+            )
+            excluded_indices: set[int] = set(latest_indices)
+        else:
+            latest_user_index = next(
+                (
+                    index
+                    for index in range(len(messages) - 1, -1, -1)
+                    if str(messages[index].get("role") or "").lower() == "user"
+                ),
+                len(messages) - 1,
+            )
+            latest_label = _LATEST_LABEL
+            final_directive = (
+                _TOOL_ISOLATION_FINAL_DIRECTIVE
+                if self.enforce_tool_isolation
+                else _FINAL_DIRECTIVE
+            )
+            latest_message = messages[latest_user_index]
+            latest_json = serialize_history_message(latest_message, compact_content=False)
+            excluded_indices = {latest_user_index}
+
         preamble = _TOOL_ISOLATION_PREAMBLE if self.enforce_tool_isolation else _PREAMBLE
-        final_directive = (
-            _TOOL_ISOLATION_FINAL_DIRECTIVE
-            if self.enforce_tool_isolation
-            else _FINAL_DIRECTIVE
-        )
-        latest_message = messages[latest_user_index]
-        latest_json = serialize_history_message(latest_message, compact_content=False)
         media_items = extract_attached_media(messages)
         media_header = format_user_uploaded_media_header(media_items)
         media_prefix = f"{media_header}\n\n" if media_header else ""
@@ -118,15 +156,18 @@ class HermesPromptBuilder:
                 _SYSTEM_LABEL,
                 _TOOLS_LABEL,
                 _HISTORY_LABEL,
-                _LATEST_LABEL,
+                latest_label,
                 latest_json,
                 final_directive,
             )
         )
         if fixed_cost > max_chars:
-            raise PromptTooLarge(
-                "latest user message exceeds the configured bridge prompt budget; refusing to drop it"
+            msg = (
+                "latest tool output exceeds the configured bridge prompt budget; refusing to drop it"
+                if is_tool_turn
+                else "latest user message exceeds the configured bridge prompt budget; refusing to drop it"
             )
+            raise PromptTooLarge(msg)
         available = max_chars - fixed_cost
 
         system_parts = [
@@ -141,18 +182,36 @@ class HermesPromptBuilder:
         if system_parts:
             min_system_needed = min(len(raw_system_text), 1_024)
             if available < min_system_needed:
-                raise PromptTooLarge(
-                    "latest user message leaves insufficient budget for required system context"
+                msg = (
+                    "latest tool output leaves insufficient budget for required system context"
+                    if is_tool_turn
+                    else "latest user message leaves insufficient budget for required system context"
                 )
+                raise PromptTooLarge(msg)
 
-        candidates = [
-            message
+        candidate_indices = [
+            index
             for index, message in enumerate(messages)
-            if index != latest_user_index
+            if index not in excluded_indices
             and str(message.get("role") or "").lower() not in {"system", "developer"}
         ]
+        candidates = [messages[index] for index in candidate_indices]
         if candidates:
-            all_blocks = [serialize_history_message(message) for message in candidates]
+            tool_indices_in_messages = [
+                i for i, m in enumerate(messages)
+                if str(m.get("role") or "").lower() == "tool"
+            ]
+            recent_tool_indices = set(tool_indices_in_messages[-2:])
+            all_blocks = [
+                serialize_history_message(
+                    messages[idx],
+                    is_older_tool=(
+                        str(messages[idx].get("role") or "").lower() == "tool"
+                        and idx not in recent_tool_indices
+                    ),
+                )
+                for idx in candidate_indices
+            ]
             history_needed = sum(len(block) for block in all_blocks) + max(0, len(all_blocks) - 1)
             history_reserve = min(history_needed, available // 2)
         else:
@@ -193,7 +252,7 @@ class HermesPromptBuilder:
             tools_text = ""
 
         history_budget = available - used_system - len(tools_text)
-        history_text = recent_history(messages, latest_user_index, history_budget)
+        history_text = recent_history(messages, excluded_indices, history_budget)
         prompt = (
             media_prefix
             + preamble
@@ -203,7 +262,7 @@ class HermesPromptBuilder:
             + tools_text
             + _HISTORY_LABEL
             + history_text
-            + _LATEST_LABEL
+            + latest_label
             + latest_json
             + final_directive
         )

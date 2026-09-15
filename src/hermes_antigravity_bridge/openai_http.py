@@ -1065,8 +1065,8 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 
     def _stream_response(self, body: Any) -> None:
         try:
+            self.bridge_server.chat_service.validate_request(body)
             stream_iter = self.bridge_server.chat_service.complete_stream(body)
-            first_item = next(stream_iter, None)
         except BridgeError as exc:
             self._error(exc.status_code, _safe_client_message(exc), exc.error_type)
             return
@@ -1088,6 +1088,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             self.send_header("X-Accel-Buffering", "no")
             self.close_connection = True
             self.end_headers()
+            self.wfile.flush()
 
             has_emitted_role = False
             media_filter = _StreamMediaFilter()
@@ -1120,7 +1121,10 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             def emit_item(item: dict[str, Any]) -> None:
                 nonlocal has_emitted_role
                 itype = item.get("type")
-                if itype == "reasoning_delta":
+                if itype in {"ping", "comment"}:
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+                elif itype == "reasoning_delta":
                     chunk = {
                         "id": stream_id,
                         "object": "chat.completion.chunk",
@@ -1198,10 +1202,8 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                         self.wfile.write(b"data: " + _json_bytes(usage_chunk) + b"\n\n")
                         self.wfile.flush()
 
-            if first_item is not None:
-                emit_item(first_item)
-                for item in stream_iter:
-                    emit_item(item)
+            for item in stream_iter:
+                emit_item(item)
 
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()

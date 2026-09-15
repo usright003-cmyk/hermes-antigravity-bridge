@@ -1067,6 +1067,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         try:
             self.bridge_server.chat_service.validate_request(body)
             stream_iter = self.bridge_server.chat_service.complete_stream(body)
+            first_item = next(stream_iter, None)
         except BridgeError as exc:
             self._error(exc.status_code, _safe_client_message(exc), exc.error_type)
             return
@@ -1202,6 +1203,8 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                         self.wfile.write(b"data: " + _json_bytes(usage_chunk) + b"\n\n")
                         self.wfile.flush()
 
+            if first_item is not None:
+                emit_item(first_item)
             for item in stream_iter:
                 emit_item(item)
 

@@ -4,10 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-import queue
 import re
-import threading
-import time
 from collections.abc import Iterator
 from typing import Any
 
@@ -648,50 +645,8 @@ class ChatCompletionService:
             _THOUGHT_START_PAG = tuple("<thought"[:i] for i in range(len("<thought") - 1, 0, -1))
             _THOUGHT_END_PAG = tuple("</thought>"[:i] for i in range(len("</thought>") - 1, 0, -1))
 
-            event_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
-            sentinel = object()
-
-            def _pump_stream() -> None:
-                try:
-                    for evt in stream_gen:
-                        event_queue.put(("event", evt))
-                    event_queue.put(("done", sentinel))
-                except Exception as exc:  # noqa: BLE001
-                    event_queue.put(("error", exc))
-
-            pump_thread = threading.Thread(target=_pump_stream, daemon=True)
-            pump_thread.start()
-
-            last_yield_time = time.time()
             try:
-                while True:
-                    now = time.time()
-                    if now - last_yield_time >= 15.0:
-                        yield {
-                            "type": "ping",
-                            "requested_model": requested,
-                            "actual_model": actual_model,
-                        }
-                        last_yield_time = time.time()
-
-                    wait_timeout = max(0.05, 15.0 - (time.time() - last_yield_time))
-                    try:
-                        kind, item = event_queue.get(timeout=wait_timeout)
-                    except queue.Empty:
-                        yield {
-                            "type": "ping",
-                            "requested_model": requested,
-                            "actual_model": actual_model,
-                        }
-                        last_yield_time = time.time()
-                        continue
-
-                    if kind == "error":
-                        raise item
-                    if kind == "done":
-                        break
-
-                    event = item
+                for event in stream_gen:
                     etype = event.get("type")
                     if etype in {"ping", "comment"}:
                         yield {
@@ -699,12 +654,10 @@ class ChatCompletionService:
                             "requested_model": requested,
                             "actual_model": actual_model,
                         }
-                        last_yield_time = time.time()
                         continue
                     if etype == "reasoning_delta":
                         content = str(event.get("content", ""))
                         if content:
-                            last_yield_time = time.time()
                             yield {
                                 "type": "reasoning_delta",
                                 "content": content,
@@ -714,13 +667,6 @@ class ChatCompletionService:
                     elif etype == "delta":
                         text = str(event.get("content", ""))
                         if has_tool_call_start:
-                            if time.time() - last_yield_time >= 15.0:
-                                yield {
-                                    "type": "ping",
-                                    "requested_model": requested,
-                                    "actual_model": actual_model,
-                                }
-                                last_yield_time = time.time()
                             continue
                         pending_buffer += text
                         while pending_buffer:
@@ -730,7 +676,6 @@ class ChatCompletionService:
                                     idx = lowered.find(_THOUGHT_END)
                                     part = pending_buffer[:idx]
                                     if part:
-                                        last_yield_time = time.time()
                                         yield {
                                             "type": "reasoning_delta",
                                             "content": part,
@@ -753,7 +698,6 @@ class ChatCompletionService:
                                         to_emit = pending_buffer
                                         pending_buffer = ""
                                     if to_emit:
-                                        last_yield_time = time.time()
                                         yield {
                                             "type": "reasoning_delta",
                                             "content": to_emit,
@@ -768,7 +712,6 @@ class ChatCompletionService:
                                     prefix = pending_buffer[:idx]
                                     if prefix:
                                         streamed_text += prefix
-                                        last_yield_time = time.time()
                                         yield {
                                             "type": "delta",
                                             "content": prefix,
@@ -784,7 +727,6 @@ class ChatCompletionService:
                                     prefix = pending_buffer[:idx]
                                     if prefix:
                                         streamed_text += prefix
-                                        last_yield_time = time.time()
                                         yield {
                                             "type": "delta",
                                             "content": prefix,
@@ -807,7 +749,6 @@ class ChatCompletionService:
                                         pending_buffer = ""
                                     if to_emit:
                                         streamed_text += to_emit
-                                        last_yield_time = time.time()
                                         yield {
                                             "type": "delta",
                                             "content": to_emit,
@@ -977,7 +918,10 @@ class ChatCompletionService:
                         return
             finally:
                 if hasattr(stream_gen, "close"):
-                    stream_gen.close()
+                    try:
+                        stream_gen.close()
+                    except (ValueError, RuntimeError):
+                        pass
         else:
             if reasoning_effort is not None:
                 try:

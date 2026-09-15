@@ -267,6 +267,97 @@ class StreamingSSEProtocolTests(unittest.TestCase):
             server.server_close()
             thread.join(timeout=2)
 
+    def test_complete_stream_no_generator_already_executing(self):
+        class GeneratorBackend:
+            def list_models(self, *, force_refresh=False):
+                return ("model-a",)
+
+            def resolve_model(self, requested):
+                return requested
+
+            def generate_stream(self, prompt, model, **kwargs):
+                yield {"type": "delta", "content": "chunk 1"}
+                yield {"type": "delta", "content": "chunk 2"}
+                yield {
+                    "type": "result",
+                    "response": BackendResponse(
+                        response="chunk 1chunk 2",
+                        model=model,
+                        usage={"input_tokens": 5, "output_tokens": 5, "total_tokens": 10},
+                        status="SUCCESS",
+                        duration_seconds=0.1,
+                    ),
+                }
+
+        service = ChatCompletionService(
+            backend=GeneratorBackend(),
+            prompt_builder=HermesPromptBuilder(),
+            prompt_budget=PromptBudget(),
+        )
+        gen = service.complete_stream({
+            "model": "model-a",
+            "messages": [{"role": "user", "content": "test"}],
+        })
+        first = next(gen)
+        self.assertEqual(first.get("type"), "delta")
+        # Closing early must never raise ValueError: generator already executing
+        try:
+            gen.close()
+        except ValueError as exc:
+            self.fail(f"gen.close() raised ValueError: {exc}")
+
+    def test_stream_error_before_headers_returns_500(self):
+        class BrokenBackend:
+            def list_models(self, *, force_refresh=False):
+                return ("model-a",)
+
+            def resolve_model(self, requested):
+                return requested
+
+            def generate_stream(self, prompt, model, **kwargs):
+                raise BackendError("CLI connection failed")
+
+        token = "test-token-fixed-length-123456789012"
+        config = BridgeConfig(
+            server=ServerConfig(
+                host="127.0.0.1",
+                port=0,
+                token=token,
+                request_body_limit_bytes=4096,
+                max_concurrent_requests=1,
+            ),
+            antigravity=AntigravityConfig(binary=Path(sys.executable)),
+            prompt=PromptBudget(),
+        )
+        service = ChatCompletionService(
+            backend=BrokenBackend(),
+            prompt_builder=HermesPromptBuilder(),
+            prompt_budget=config.prompt,
+        )
+        server = create_http_server(config, service)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            url = f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions"
+            body = json.dumps({
+                "model": "model-a",
+                "messages": [{"role": "user", "content": "fail"}],
+                "stream": True,
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=body,
+                headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+                method="POST",
+            )
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(req, timeout=5)
+            self.assertEqual(ctx.exception.code, 502)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
 
 if __name__ == "__main__":
     unittest.main()

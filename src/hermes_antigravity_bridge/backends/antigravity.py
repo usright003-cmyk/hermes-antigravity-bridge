@@ -1347,7 +1347,11 @@ class AntigravityBackend:
 
         try:
             while True:
-                item = delta_queue.get()
+                try:
+                    item = delta_queue.get(timeout=15.0)
+                except queue.Empty:
+                    yield {"type": "ping"}
+                    continue
                 if item["type"] == "done":
                     break
                 yield item

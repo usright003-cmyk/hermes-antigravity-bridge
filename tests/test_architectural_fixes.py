@@ -189,7 +189,7 @@ class AntigravityBackendTransientAndEnvTests(unittest.TestCase):
 
     def test_transient_failure_classification(self):
         self.assertTrue(is_transient_backend_error(BackendError("Error: 400 improperly formatted function call occurred")))
-        self.assertTrue(is_transient_backend_error(BackendError("RESOURCE_EXHAUSTED: quota reached")))
+        self.assertFalse(is_transient_backend_error(BackendError("RESOURCE_EXHAUSTED: quota reached")))
         self.assertFalse(is_transient_backend_error(BackendError("Invalid authentication token")))
 
     def test_base_environment_exports_utf8(self):
@@ -306,7 +306,7 @@ class StreamingSSEProtocolTests(unittest.TestCase):
         except ValueError as exc:
             self.fail(f"gen.close() raised ValueError: {exc}")
 
-    def test_stream_error_before_headers_returns_500(self):
+    def test_stream_error_framed_as_sse_event(self):
         class BrokenBackend:
             def list_models(self, *, force_refresh=False):
                 return ("model-a",)
@@ -350,13 +350,251 @@ class StreamingSSEProtocolTests(unittest.TestCase):
                 headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
                 method="POST",
             )
-            with self.assertRaises(urllib.error.HTTPError) as ctx:
-                urllib.request.urlopen(req, timeout=5)
-            self.assertEqual(ctx.exception.code, 502)
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                self.assertEqual(resp.status, 200)
+                content = resp.read().decode("utf-8")
+                self.assertIn("data: [DONE]", content)
+                self.assertIn('"error":', content)
+                self.assertNotIn('"finish_reason":"stop"', content)
         finally:
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+    def test_immediate_headers_before_first_chunk_yield(self):
+        import http.client
+
+        backend_started = threading.Event()
+        can_yield = threading.Event()
+
+        class DelayedStreamBackend:
+            def list_models(self, *, force_refresh=False):
+                return ("model-a",)
+
+            def resolve_model(self, requested):
+                return requested
+
+            def generate_stream(self, prompt, model, **kwargs):
+                backend_started.set()
+                if not can_yield.wait(timeout=5):
+                    raise RuntimeError("timeout waiting to yield")
+                yield {"type": "delta", "content": "hello world"}
+
+        token = "test-token-fixed-length-123456789012"
+        config = BridgeConfig(
+            server=ServerConfig(
+                host="127.0.0.1",
+                port=0,
+                token=token,
+                request_body_limit_bytes=4096,
+                max_concurrent_requests=1,
+            ),
+            antigravity=AntigravityConfig(binary=Path(sys.executable)),
+            prompt=PromptBudget(),
+        )
+        service = ChatCompletionService(
+            backend=DelayedStreamBackend(),
+            prompt_builder=HermesPromptBuilder(),
+            prompt_budget=config.prompt,
+        )
+        server = create_http_server(config, service)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        conn = None
+        try:
+            port = server.server_address[1]
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            body = json.dumps({
+                "model": "model-a",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+            }).encode("utf-8")
+            conn.request(
+                "POST",
+                "/v1/chat/completions",
+                body=body,
+                headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+            )
+            resp = conn.getresponse()
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(resp.getheader("Content-Type"), "text/event-stream")
+            can_yield.set()
+            body_bytes = resp.read()
+            self.assertIn(b"hello world", body_bytes)
+            self.assertIn(b"data: [DONE]", body_bytes)
+        finally:
+            can_yield.set()
+            if conn:
+                conn.close()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_management_routes_unblocked_during_concurrency_saturation(self):
+        backend_active = threading.Event()
+        backend_release = threading.Event()
+
+        class SaturatedBackend:
+            def list_models(self, *, force_refresh=False):
+                return ("model-a",)
+
+            def resolve_model(self, requested):
+                return requested
+
+            def readiness(self):
+                return {"status": "ready", "models": ["model-a"]}
+
+            def generate(self, prompt, model):
+                backend_active.set()
+                if not backend_release.wait(timeout=5):
+                    raise RuntimeError("timeout waiting for release")
+                return BackendResponse(response="OK", model=model, usage={})
+
+        token = "test-token-fixed-length-123456789012"
+        config = BridgeConfig(
+            server=ServerConfig(
+                host="127.0.0.1",
+                port=0,
+                token=token,
+                request_body_limit_bytes=4096,
+                max_concurrent_requests=1,
+            ),
+            antigravity=AntigravityConfig(binary=Path(sys.executable)),
+            prompt=PromptBudget(),
+        )
+        service = ChatCompletionService(
+            backend=SaturatedBackend(),
+            prompt_builder=HermesPromptBuilder(),
+            prompt_budget=config.prompt,
+        )
+        server = create_http_server(config, service)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        port = server.server_address[1]
+
+        def hold_slot():
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/v1/chat/completions",
+                data=json.dumps({"model": "model-a", "messages": [{"role": "user", "content": "wait"}]}).encode("utf-8"),
+                headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    r.read()
+            except Exception:  # noqa: BLE001, S110
+                pass
+
+        holder_thread = threading.Thread(target=hold_slot, daemon=True)
+        holder_thread.start()
+        self.assertTrue(backend_active.wait(timeout=2))
+
+        try:
+            for path, auth in [
+                ("/health", False),
+                ("/ready", True),
+                ("/api/metrics", False),
+                ("/version", True),
+                ("/dashboard", False),
+            ]:
+                headers = {"Authorization": "Bearer " + token} if auth else {}
+                req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", headers=headers)
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    self.assertEqual(r.status, 200, f"Route {path} failed with {r.status}")
+        finally:
+            backend_release.set()
+            holder_thread.join(timeout=2)
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_incremental_tool_streaming_and_deduplication(self):
+        class ToolStreamBackend:
+            def list_models(self, *, force_refresh=False):
+                return ("model-a",)
+
+            def resolve_model(self, requested):
+                return requested
+
+            def readiness(self):
+                return {"status": "ready", "models": ["model-a"]}
+
+            def generate_stream(self, prompt, model, **kwargs):
+                yield {"type": "delta", "content": '<tool_call>{"name": "bash", "arguments": {"comm'}
+                yield {"type": "delta", "content": 'and": "ls -la"}}</tool_call>'}
+                yield {
+                    "type": "result",
+                    "response": BackendResponse(
+                        response='<tool_call>{"name": "bash", "arguments": {"command": "ls -la"}}</tool_call>',
+                        model=model,
+                        usage={},
+                    ),
+                }
+
+        token = "test-token-fixed-length-123456789012"
+        config = BridgeConfig(
+            server=ServerConfig(
+                host="127.0.0.1",
+                port=0,
+                token=token,
+                request_body_limit_bytes=4096,
+                max_concurrent_requests=1,
+            ),
+            antigravity=AntigravityConfig(binary=Path(sys.executable)),
+            prompt=PromptBudget(),
+        )
+        service = ChatCompletionService(
+            backend=ToolStreamBackend(),
+            prompt_builder=HermesPromptBuilder(),
+            prompt_budget=config.prompt,
+        )
+        server = create_http_server(config, service)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            url = f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions"
+            body = json.dumps({
+                "model": "model-a",
+                "messages": [{"role": "user", "content": "run ls"}],
+                "tools": [{"type": "function", "function": {"name": "bash", "parameters": {}}}],
+                "stream": True,
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=body,
+                headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                self.assertEqual(resp.status, 200)
+                content = resp.read().decode("utf-8")
+                lines = [line.removeprefix("data: ").strip() for line in content.splitlines() if line.startswith("data: ")]
+                chunks = [json.loads(line) for line in lines if line != "[DONE]"]
+
+                tc_chunks = [c for c in chunks if c.get("choices") and c["choices"][0].get("delta", {}).get("tool_calls")]
+                self.assertGreaterEqual(len(tc_chunks), 1)
+                start_tc = tc_chunks[0]["choices"][0]["delta"]["tool_calls"][0]
+                self.assertEqual(start_tc.get("function", {}).get("name"), "bash")
+
+                finish_chunks = [c for c in chunks if c.get("choices") and c["choices"][0].get("finish_reason") == "tool_calls"]
+                self.assertEqual(len(finish_chunks), 1)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_giant_tool_message_compacted_in_builder(self):
+        builder = HermesPromptBuilder()
+        giant_tool_output = "X" * 50000
+        messages = [
+            {"role": "user", "content": "analyze data"},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "query", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "c1", "name": "query", "content": giant_tool_output},
+            {"role": "user", "content": "what did it say?"},
+        ]
+        prompt = builder.build(messages)
+        self.assertLess(len(prompt), 35000)
+        self.assertIn("[... bridge compacted", prompt)
 
 
 if __name__ == "__main__":

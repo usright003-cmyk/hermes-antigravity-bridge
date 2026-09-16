@@ -9,6 +9,7 @@ from ..errors import InvalidRequest, PromptTooLarge
 from ..prompt.primitives import (
     clip_head_tail,
     compact_non_latest_text,
+    compact_tool_output,
     compact_tool_section,
     extract_attached_media,
     format_user_uploaded_media_header,
@@ -104,6 +105,18 @@ class HermesPromptBuilder:
             raise InvalidRequest("messages must be a non-empty array")
         if max_chars < 4_096:
             raise InvalidRequest("prompt budget must be at least 4096 characters")
+
+        sanitized_messages: list[dict[str, Any]] = []
+        for msg in messages:
+            if isinstance(msg, dict) and str(msg.get("role") or "").lower() == "tool":
+                c = msg.get("content")
+                if isinstance(c, str) and len(c) > 32_000:
+                    new_msg = dict(msg)
+                    new_msg["content"] = compact_tool_output(c)
+                    sanitized_messages.append(new_msg)
+                    continue
+            sanitized_messages.append(msg)
+        messages = sanitized_messages
 
         is_tool_turn = str(messages[-1].get("role") or "").lower() == "tool"
         if is_tool_turn:
@@ -201,7 +214,7 @@ class HermesPromptBuilder:
                 i for i, m in enumerate(messages)
                 if str(m.get("role") or "").lower() == "tool"
             ]
-            recent_tool_indices = set(tool_indices_in_messages[-2:])
+            recent_tool_indices = set(tool_indices_in_messages[-1:])
             all_blocks = [
                 serialize_history_message(
                     messages[idx],

@@ -528,7 +528,7 @@ class HTTPContractTests(unittest.TestCase):
                 self.assertIn("data: [DONE]", content)
                 self.assertIn("Hello ", content)
                 self.assertNotIn("[Bridge Warning:", content)
-                self.assertIn('"finish_reason":"stop"', content)
+                self.assertNotIn('"finish_reason":"stop"', content)
                 self.assertIn('"model":"model-a"', content)
                 self.assertIn('"error":', content)
         finally:

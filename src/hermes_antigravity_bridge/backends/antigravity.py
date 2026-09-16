@@ -26,6 +26,7 @@ from ..errors import (
     BackendProtocolError,
     BackendTimeout,
     BackendUnavailable,
+    RateLimitError,
     ToolIsolationError,
     UnknownModel,
 )
@@ -42,12 +43,8 @@ _REQUIRED_FLAGS = {
 }
 _TRANSIENT_MARKERS = (
     "503",
-    "429",
     "unavailable",
-    "rate limit",
     "overloaded",
-    "quota",
-    "resource exhausted",
     "busy",
     "timeout",
     "temporar",
@@ -136,7 +133,7 @@ def _format_single_media_response(response: str, media_tag: str | None = None) -
 
 def is_transient_backend_error(exc: Exception) -> bool:
     """Determine whether an upstream error represents a transient network reset."""
-    if isinstance(exc, (ToolIsolationError, BackendProtocolError)):
+    if isinstance(exc, (RateLimitError, ToolIsolationError, BackendProtocolError)):
         return False
     msg = str(exc).lower()
     non_transient_markers = (
@@ -148,6 +145,11 @@ def is_transient_backend_error(exc: Exception) -> bool:
         "false-success",
         "tool_isolation",
         "permission",
+        "429",
+        "rate limit",
+        "quota",
+        "resource exhausted",
+        "resource_exhausted",
     )
     if any(m in msg for m in non_transient_markers):
         return False
@@ -1147,11 +1149,18 @@ class AntigravityBackend:
 
         if return_code != 0:
             error = diagnostics or str(result.get("error") or "Antigravity CLI failed")
+            err_lower = error.lower()
+            if any(m in err_lower for m in ("429", "rate limit", "quota", "resource exhausted", "resource_exhausted")):
+                raise RateLimitError(error[-500:])
             raise BackendError(error[-500:])
         if not result:
             raise BackendProtocolError("Antigravity emitted no result event")
         if result.get("status") != "SUCCESS":
-            raise BackendError(str(result.get("error") or result.get("status") or "Antigravity failed")[-500:])
+            err_msg = str(result.get("error") or result.get("status") or "Antigravity failed")
+            err_lower = err_msg.lower()
+            if any(m in err_lower for m in ("429", "rate limit", "quota", "resource exhausted", "resource_exhausted")):
+                raise RateLimitError(err_msg[-500:])
+            raise BackendError(err_msg[-500:])
         response = str(result.get("response") or "").strip()
         if not response:
             if intercepted_tool_calls:

@@ -9,6 +9,7 @@ import ipaddress
 import json
 import logging
 import mimetypes
+import queue
 import re
 import socket
 import threading
@@ -562,59 +563,11 @@ class BridgeHTTPServer(ThreadingHTTPServer):
         return sock, addr
 
     def process_request(self, request: Any, client_address: Any) -> None:
-        if not self.request_slots.acquire(timeout=_SLOT_ACQUIRE_TIMEOUT_SECONDS):
-            body = _json_bytes(
-                {
-                    "error": {
-                        "message": "bridge concurrency limit reached",
-                        "type": "rate_limit_error",
-                    }
-                }
-            )
-            response = (
-                b"HTTP/1.1 429 Too Many Requests\r\n"
-                b"Content-Type: application/json\r\n"
-                b"Connection: close\r\n"
-                + f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
-                + body
-            )
-            try:
-                request.sendall(response)
-                try:
-                    request.shutdown(socket.SHUT_WR)
-                except OSError:
-                    pass
-                request.settimeout(0.2)
-                try:
-                    while request.recv(4096):
-                        pass
-                except OSError:
-                    pass
-            except OSError:
-                pass
-            self.shutdown_request(request)
-            return
         try:
             super().process_request(request, client_address)
         except Exception:
-            self.request_slots.release()
             self.shutdown_request(request)
             raise
-
-    def process_request_thread(self, request: Any, client_address: Any) -> None:
-        slot_released = False
-        try:
-            try:
-                self.finish_request(request, client_address)
-            finally:
-                self.request_slots.release()
-                slot_released = True
-        except Exception:  # noqa: BLE001 - preserve socketserver error handling
-            self.handle_error(request, client_address)
-        finally:
-            if not slot_released:
-                self.request_slots.release()
-            self.shutdown_request(request)
 
 
 class BridgeRequestHandler(BaseHTTPRequestHandler):
@@ -1033,57 +986,71 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             self._send(200, {"model": model, "name": model, "details": {"family": "antigravity"}})
             return
         if path in {"/v1/images/generations", "/images/generations"}:
-            self._handle_image_generations()
+            if not self._require_auth():
+                return
+            if not self.bridge_server.request_slots.acquire(timeout=_SLOT_ACQUIRE_TIMEOUT_SECONDS):
+                self._error(429, "bridge concurrency limit reached", "rate_limit_error")
+                return
+            try:
+                self._handle_image_generations()
+            finally:
+                self.bridge_server.request_slots.release()
             return
+
         if path not in {"/v1/chat/completions", "/chat/completions"}:
             self._error(404, "not found", "not_found_error")
             return
         if not self._require_auth():
             return
-        content_type = self.headers.get_content_type()
-        if content_type != "application/json":
-            self._error(415, "Content-Type must be application/json", "invalid_request_error")
+        if not self.bridge_server.request_slots.acquire(timeout=_SLOT_ACQUIRE_TIMEOUT_SECONDS):
+            self._error(429, "bridge concurrency limit reached", "rate_limit_error")
             return
         try:
-            length = int(self.headers.get("Content-Length", "0"))
-        except ValueError:
-            length = 0
-        limit = self.bridge_server.bridge_config.server.request_body_limit_bytes
-        if length <= 0:
-            self._error(400, "request body is empty", "invalid_request_error")
-            return
-        if length > limit:
-            self._error(413, "request body exceeds configured limit", "request_too_large")
-            return
-        try:
-            raw = self.rfile.read(length)
-            body = json.loads(raw)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            self._error(400, "request body is not valid UTF-8 JSON", "invalid_request_error")
-            return
-        if not isinstance(body, dict):
-            self._error(400, "request body must be a JSON object", "invalid_request_error")
-            return
-        if bool(body.get("stream")):
-            self._stream_response(body)
-            return
+            content_type = self.headers.get_content_type()
+            if content_type != "application/json":
+                self._error(415, "Content-Type must be application/json", "invalid_request_error")
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                length = 0
+            limit = self.bridge_server.bridge_config.server.request_body_limit_bytes
+            if length <= 0:
+                self._error(400, "request body is empty", "invalid_request_error")
+                return
+            if length > limit:
+                self._error(413, "request body exceeds configured limit", "request_too_large")
+                return
+            try:
+                raw = self.rfile.read(length)
+                body = json.loads(raw)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                self._error(400, "request body is not valid UTF-8 JSON", "invalid_request_error")
+                return
+            if not isinstance(body, dict):
+                self._error(400, "request body must be a JSON object", "invalid_request_error")
+                return
+            if bool(body.get("stream")):
+                self._stream_response(body)
+                return
 
-        try:
-            result = self.bridge_server.chat_service.complete(body)
-            response = self._completion_response(result)
-            self.bridge_server.metrics.record_request(streaming=False)
-            self._send(200, response)
-        except BridgeError as exc:
-            self._error(exc.status_code, _safe_client_message(exc), exc.error_type)
-        except Exception:  # noqa: BLE001 - sanitize unexpected failures at the HTTP boundary
-            _LOG.exception("unexpected bridge request failure")
-            self._error(500, "internal bridge error", "internal_error")
+            try:
+                result = self.bridge_server.chat_service.complete(body)
+                response = self._completion_response(result)
+                self.bridge_server.metrics.record_request(streaming=False)
+                self._send(200, response)
+            except BridgeError as exc:
+                self._error(exc.status_code, _safe_client_message(exc), exc.error_type)
+            except Exception:  # noqa: BLE001 - sanitize unexpected failures at the HTTP boundary
+                _LOG.exception("unexpected bridge request failure")
+                self._error(500, "internal bridge error", "internal_error")
+        finally:
+            self.bridge_server.request_slots.release()
 
     def _stream_response(self, body: Any) -> None:
         try:
             self.bridge_server.chat_service.validate_request(body)
             stream_iter = self.bridge_server.chat_service.complete_stream(body)
-            first_item = next(stream_iter, None)
         except BridgeError as exc:
             self._error(exc.status_code, _safe_client_message(exc), exc.error_type)
             return
@@ -1096,6 +1063,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         now = int(time.time())
         requested_model = str(body.get("model") or "") if isinstance(body, dict) else ""
         self.bridge_server.metrics.record_request(streaming=True)
+        stop_event = threading.Event()
         try:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -1108,6 +1076,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             self.wfile.flush()
 
             has_emitted_role = False
+            has_streamed_tool_deltas = False
             media_filter = _StreamMediaFilter()
 
             def _send_delta(text: str, model_name: str) -> None:
@@ -1136,7 +1105,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                 self.wfile.flush()
 
             def emit_item(item: dict[str, Any]) -> None:
-                nonlocal has_emitted_role
+                nonlocal has_emitted_role, has_streamed_tool_deltas
                 itype = item.get("type")
                 if itype in {"ping", "comment"}:
                     self.wfile.write(b": ping\n\n")
@@ -1163,7 +1132,19 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                     deltas = media_filter.process_chunk(raw_content)
                     for delta_text in deltas:
                         _send_delta(delta_text, target_model)
-                elif itype == "tool_calls":
+                elif itype == "tool_call_start":
+                    has_streamed_tool_deltas = True
+                    tc_chunk = [
+                        {
+                            "index": item.get("index", 0),
+                            "id": item.get("id", "call_" + uuid.uuid4().hex[:8]),
+                            "type": "function",
+                            "function": {
+                                "name": item.get("name", ""),
+                                "arguments": item.get("arguments", ""),
+                            },
+                        }
+                    ]
                     chunk = {
                         "id": stream_id,
                         "object": "chat.completion.chunk",
@@ -1172,13 +1153,55 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                         "choices": [
                             {
                                 "index": 0,
-                                "delta": {"tool_calls": item["tool_calls"]},
+                                "delta": {"tool_calls": tc_chunk},
                                 "finish_reason": None,
                             }
                         ],
                     }
                     self.wfile.write(b"data: " + _json_bytes(chunk) + b"\n\n")
                     self.wfile.flush()
+                elif itype == "tool_call_delta":
+                    has_streamed_tool_deltas = True
+                    tc_chunk = [
+                        {
+                            "index": item.get("index", 0),
+                            "function": {
+                                "arguments": item.get("arguments", ""),
+                            },
+                        }
+                    ]
+                    chunk = {
+                        "id": stream_id,
+                        "object": "chat.completion.chunk",
+                        "created": now,
+                        "model": item.get("requested_model", "") or requested_model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"tool_calls": tc_chunk},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                    self.wfile.write(b"data: " + _json_bytes(chunk) + b"\n\n")
+                    self.wfile.flush()
+                elif itype == "tool_calls":
+                    if not has_streamed_tool_deltas:
+                        chunk = {
+                            "id": stream_id,
+                            "object": "chat.completion.chunk",
+                            "created": now,
+                            "model": item.get("requested_model", "") or requested_model,
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": {"tool_calls": item["tool_calls"]},
+                                    "finish_reason": None,
+                                }
+                            ],
+                        }
+                        self.wfile.write(b"data: " + _json_bytes(chunk) + b"\n\n")
+                        self.wfile.flush()
                 elif itype == "finish":
                     target_model = item.get("requested_model", "") or requested_model
                     final_deltas = media_filter.finish()
@@ -1219,38 +1242,86 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                         self.wfile.write(b"data: " + _json_bytes(usage_chunk) + b"\n\n")
                         self.wfile.flush()
 
-            if first_item is not None:
-                emit_item(first_item)
-            for item in stream_iter:
-                emit_item(item)
+            # Decoupled Keep-Alive Pump
+            item_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
 
-            self.wfile.write(b"data: [DONE]\n\n")
-            self.wfile.flush()
+            def _stream_worker() -> None:
+                try:
+                    for stream_item in stream_iter:
+                        if stop_event.is_set():
+                            break
+                        item_queue.put(("item", stream_item))
+                    item_queue.put(("done", None))
+                except BaseException as exc:  # noqa: BLE001
+                    item_queue.put(("error", exc))
+                finally:
+                    if hasattr(stream_iter, "close"):
+                        try:
+                            stream_iter.close()
+                        except Exception:  # noqa: BLE001, S110
+                            pass
+
+            worker_thread = threading.Thread(target=_stream_worker, daemon=True)
+            worker_thread.start()
+
+            while True:
+                try:
+                    msg_type, payload = item_queue.get(timeout=5.0)
+                except queue.Empty:
+                    try:
+                        self.wfile.write(b": ping\n\n")
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError):
+                        _LOG.info("client disconnected during keep-alive ping")
+                        stop_event.set()
+                        break
+                    continue
+
+                if msg_type == "item":
+                    emit_item(payload)
+                elif msg_type == "error":
+                    stop_event.set()
+                    exc = payload
+                    if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
+                        _LOG.info("client disconnected during stream worker")
+                        break
+                    _LOG.warning("stream worker error: %s", exc)
+                    try:
+                        msg = _safe_client_message(exc) if isinstance(exc, BridgeError) else "internal bridge stream error"
+                        err_type = exc.error_type if isinstance(exc, BridgeError) else "internal_error"
+                        code = getattr(exc, "status_code", 500)
+                        err_chunk = {
+                            "error": {
+                                "message": msg,
+                                "type": err_type,
+                                "code": code,
+                            }
+                        }
+                        self.wfile.write(b"data: " + _json_bytes(err_chunk) + b"\n\n")
+                        self.wfile.write(b"data: [DONE]\n\n")
+                        self.wfile.flush()
+                    except (OSError, RuntimeError) as write_err:
+                        _LOG.debug("Could not flush SSE error event: %s", write_err)
+                    break
+                elif msg_type == "done":
+                    self.wfile.write(b"data: [DONE]\n\n")
+                    self.wfile.flush()
+                    break
+
         except (BrokenPipeError, ConnectionResetError):
             _LOG.info("client disconnected during stream")
         except BridgeError as exc:
             _LOG.warning("bridge error during active stream: %s", exc)
             try:
+                msg = _safe_client_message(exc)
+                err_type = exc.error_type
+                code = getattr(exc, "status_code", 500)
                 err_chunk = {
-                    "id": stream_id,
-                    "object": "chat.completion.chunk",
-                    "created": now,
-                    "model": requested_model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {},
-                            "finish_reason": "stop",
-                        }
-                    ],
                     "error": {
-                        "message": _safe_client_message(exc),
-                        "type": exc.error_type,
-                    },
-                    "x_bridge_error": {
-                        "type": exc.error_type,
-                        "message": _safe_client_message(exc),
-                    },
+                        "message": msg,
+                        "type": err_type,
+                        "code": code,
+                    }
                 }
                 self.wfile.write(b"data: " + _json_bytes(err_chunk) + b"\n\n")
                 self.wfile.write(b"data: [DONE]\n\n")
@@ -1261,25 +1332,11 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             _LOG.exception("unexpected error during active stream")
             try:
                 err_chunk = {
-                    "id": stream_id,
-                    "object": "chat.completion.chunk",
-                    "created": now,
-                    "model": requested_model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {},
-                            "finish_reason": "stop",
-                        }
-                    ],
                     "error": {
                         "message": "internal bridge stream error",
                         "type": "internal_error",
-                    },
-                    "x_bridge_error": {
-                        "type": "internal_error",
-                        "message": "internal bridge stream error",
-                    },
+                        "code": 500,
+                    }
                 }
                 self.wfile.write(b"data: " + _json_bytes(err_chunk) + b"\n\n")
                 self.wfile.write(b"data: [DONE]\n\n")
@@ -1287,6 +1344,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             except (OSError, RuntimeError) as write_err:
                 _LOG.debug("Could not flush SSE error event: %s", write_err)
         finally:
+            stop_event.set()
             if hasattr(stream_iter, "close"):
                 try:
                     stream_iter.close()

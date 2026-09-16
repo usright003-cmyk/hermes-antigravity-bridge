@@ -40,6 +40,11 @@ class BackendTimeout(BackendError):
     error_type = "timeout_error"
 
 
+class RateLimitError(BackendError):
+    status_code = 429
+    error_type = "rate_limit_error"
+
+
 class BackendProtocolError(BackendError):
     pass
 

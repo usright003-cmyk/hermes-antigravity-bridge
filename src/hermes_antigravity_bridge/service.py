@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import re
+import uuid
 from collections.abc import Collection, Iterator
 from typing import Any
 
 from .contracts import ChatCompletionResult, TextBackend
-from .errors import InvalidRequest, InvalidToolCall
+from .errors import InvalidRequest, InvalidToolCall, RateLimitError
 from .integrations.hermes import HermesPromptBuilder
 from .prompt.budget import PromptBudget
 from .tool_calls import _repair_json_string, parse_tool_calls
@@ -239,6 +240,15 @@ def _extract_unadvertised_image_tool_call(
     """Backward-compatible helper returning the first unadvertised image tool call if any."""
     calls = _extract_unadvertised_image_tool_calls(text, allowed_tool_names)
     return calls[0] if calls else None
+
+
+def _handle_image_generate_error(exc: Exception, prompt: str) -> None:
+    if isinstance(exc, RateLimitError):
+        raise exc
+    msg = str(exc).lower()
+    if getattr(exc, "status_code", None) == 429 or any(m in msg for m in ("429", "rate limit", "quota", "resource exhausted", "resource_exhausted")):
+        raise RateLimitError(str(exc)) from exc
+    _LOG.warning("Failed to fulfill unadvertised image tool call for %r: %s", prompt, exc)
 
 
 def _extract_unstreamed_text(full_text: str, streamed_text: str) -> str:
@@ -532,7 +542,7 @@ class ChatCompletionService:
                             if l.strip().startswith("MEDIA:"):
                                 generated_img_lines.append(_clean_media_tag(l.strip()))
                 except Exception as exc:  # noqa: BLE001
-                    _LOG.warning("Failed to fulfill unadvertised image tool call for %r: %s", img_prompt, exc)
+                    _handle_image_generate_error(exc, img_prompt)
 
             surrounding_text = re.sub(
                 r"<tool_call(?:\s+[^>]*)?>.*?</tool_call\s*>", "", cleaned_response, flags=re.DOTALL | re.IGNORECASE
@@ -663,10 +673,161 @@ class ChatCompletionService:
             streamed_text = ""
             has_tool_call_start = False
             in_thought = False
+            in_tool_call = False
+            tool_call_buffer = ""
+            tool_call_index = 0
+            tool_call_started = False
+            tool_call_id = ""
+            tool_call_name = ""
+            tool_call_is_advertised = True
+            arg_streamed_chars = 0
             _THOUGHT_START = "<thought>"
             _THOUGHT_END = "</thought>"
             _THOUGHT_START_PAG = tuple("<thought"[:i] for i in range(len("<thought") - 1, 0, -1))
             _THOUGHT_END_PAG = tuple("</thought>"[:i] for i in range(len("</thought>") - 1, 0, -1))
+
+            def _parse_tool_buffer() -> Iterator[dict[str, Any]]:
+                nonlocal in_tool_call, tool_call_buffer, tool_call_index
+                nonlocal tool_call_started, tool_call_id, tool_call_name
+                nonlocal tool_call_is_advertised, arg_streamed_chars
+                nonlocal pending_buffer
+
+                if not tool_call_started:
+                    name_m = re.search(r'["\']name["\']\s*:\s*["\']([^"\']+)["\']', tool_call_buffer)
+                    if name_m:
+                        raw_name = name_m.group(1).strip()
+                        clean_name = raw_name
+                        if clean_name not in allowed_names and clean_name.startswith("functions."):
+                            clean_name = clean_name.removeprefix("functions.")
+                        if clean_name not in allowed_names:
+                            for cand in allowed_names:
+                                if cand.lower() == clean_name.lower():
+                                    clean_name = cand
+                                    break
+                        if clean_name not in allowed_names:
+                            c_simple = clean_name.lower().replace("_", "").replace("-", "")
+                            for cand in allowed_names:
+                                if cand.lower().replace("_", "").replace("-", "") == c_simple:
+                                    clean_name = cand
+                                    break
+                        if clean_name not in allowed_names:
+                            synonym_groups = [
+                                {"run_command", "terminal", "bash", "shell", "exec", "runcommand", "command"},
+                                {"read_file", "view_file", "readfile", "viewfile"},
+                                {"write_file", "write_to_file", "writefile", "writetofile"},
+                                {"image_gen", "generate_image", "image_generation", "text_to_image", "draw_image"},
+                            ]
+                            c_low = clean_name.lower()
+                            for group in synonym_groups:
+                                if c_low in group:
+                                    match = next((cand for cand in allowed_names if cand.lower() in group), None)
+                                    if match:
+                                        clean_name = match
+                                        break
+
+                        id_m = re.search(r'["\']id["\']\s*:\s*["\']([^"\']+)["\']', tool_call_buffer)
+                        call_id = id_m.group(1).strip() if id_m else f"call_{uuid.uuid4().hex[:8]}"
+                        tool_call_id = call_id
+                        tool_call_name = clean_name
+
+                        if clean_name not in allowed_names and clean_name in _EXTERNAL_IMAGE_TOOL_NAMES:
+                            tool_call_is_advertised = False
+                            tool_call_started = True
+                        else:
+                            tool_call_is_advertised = True
+                            tool_call_started = True
+                            yield {
+                                "type": "tool_call_start",
+                                "index": tool_call_index,
+                                "id": tool_call_id,
+                                "name": tool_call_name,
+                                "requested_model": requested,
+                                "actual_model": actual_model,
+                            }
+
+                if tool_call_started and tool_call_is_advertised:
+                    arg_m = re.search(r'["\']arguments["\']\s*:\s*', tool_call_buffer)
+                    if arg_m:
+                        arg_val_start = arg_m.end()
+                        rem = tool_call_buffer[arg_val_start:]
+                        stripped_l = len(rem) - len(rem.lstrip())
+                        start_idx = arg_val_start + stripped_l
+                        if start_idx < len(tool_call_buffer):
+                            first_c = tool_call_buffer[start_idx]
+                            if first_c == "{":
+                                depth = 0
+                                in_s = False
+                                esc = False
+                                end_idx = len(tool_call_buffer)
+                                for ci in range(start_idx, len(tool_call_buffer)):
+                                    ch = tool_call_buffer[ci]
+                                    if esc:
+                                        esc = False
+                                        continue
+                                    if ch == "\\":
+                                        if in_s:
+                                            esc = True
+                                        continue
+                                    if ch == '"':
+                                        in_s = not in_s
+                                        continue
+                                    if not in_s:
+                                        if ch == "{":
+                                            depth += 1
+                                        elif ch == "}":
+                                            depth -= 1
+                                            if depth == 0:
+                                                end_idx = ci + 1
+                                                break
+                                arg_slice = tool_call_buffer[start_idx:end_idx]
+                                if len(arg_slice) > arg_streamed_chars:
+                                    to_stream = arg_slice[arg_streamed_chars:]
+                                    arg_streamed_chars = len(arg_slice)
+                                    yield {
+                                        "type": "tool_call_delta",
+                                        "index": tool_call_index,
+                                        "arguments": to_stream,
+                                        "requested_model": requested,
+                                        "actual_model": actual_model,
+                                    }
+                            elif first_c == '"':
+                                in_s = True
+                                esc = False
+                                end_idx = len(tool_call_buffer)
+                                for ci in range(start_idx + 1, len(tool_call_buffer)):
+                                    ch = tool_call_buffer[ci]
+                                    if esc:
+                                        esc = False
+                                        continue
+                                    if ch == "\\":
+                                        esc = True
+                                        continue
+                                    if ch == '"':
+                                        end_idx = ci + 1
+                                        break
+                                arg_slice = tool_call_buffer[start_idx:end_idx]
+                                if len(arg_slice) > arg_streamed_chars:
+                                    to_stream = arg_slice[arg_streamed_chars:]
+                                    arg_streamed_chars = len(arg_slice)
+                                    yield {
+                                        "type": "tool_call_delta",
+                                        "index": tool_call_index,
+                                        "arguments": to_stream,
+                                        "requested_model": requested,
+                                        "actual_model": actual_model,
+                                    }
+
+                end_m = re.search(r"</tool_call\s*>", tool_call_buffer, re.IGNORECASE)
+                if end_m:
+                    in_tool_call = False
+                    tool_call_index += 1
+                    tool_call_started = False
+                    tool_call_id = ""
+                    tool_call_name = ""
+                    tool_call_is_advertised = True
+                    arg_streamed_chars = 0
+                    pending_buffer = tool_call_buffer[end_m.end():] + pending_buffer
+                    tool_call_buffer = ""
 
             try:
                 for event in stream_gen:
@@ -689,13 +850,12 @@ class ChatCompletionService:
                             }
                     elif etype == "delta":
                         text = str(event.get("content", ""))
-                        if has_tool_call_start:
-                            yield {
-                                "type": "ping",
-                                "requested_model": requested,
-                                "actual_model": actual_model,
-                            }
-                            continue
+                        if in_tool_call:
+                            tool_call_buffer += text
+                            for ev in _parse_tool_buffer():
+                                yield ev
+                            if not pending_buffer:
+                                continue
                         pending_buffer += text
                         while pending_buffer:
                             if in_thought:
@@ -761,8 +921,17 @@ class ChatCompletionService:
                                             "requested_model": requested,
                                             "actual_model": actual_model,
                                         }
-                                    pending_buffer = ""
-                                    break
+                                    tag_m = re.search(r"<tool_call(?:\s+[^>]*)?>", pending_buffer[idx:], re.IGNORECASE)
+                                    if tag_m:
+                                        in_tool_call = True
+                                        tool_call_buffer = pending_buffer[idx + tag_m.end():]
+                                        pending_buffer = ""
+                                        for ev in _parse_tool_buffer():
+                                            yield ev
+                                        break
+                                    else:
+                                        pending_buffer = pending_buffer[idx:]
+                                        break
                                 else:
                                     match_len = 0
                                     for pfx in _TOOL_CALL_PREFIXES + _THOUGHT_START_PAG:
@@ -833,7 +1002,7 @@ class ChatCompletionService:
                                             if l.strip().startswith("MEDIA:"):
                                                 generated_img_lines.append(_clean_media_tag(l.strip()))
                                 except Exception as exc:  # noqa: BLE001
-                                    _LOG.warning("Failed to fulfill unadvertised image tool call in stream: %s", exc)
+                                    _handle_image_generate_error(exc, img_prompt)
 
                             surrounding_text = re.sub(
                                 r"<tool_call(?:\s+[^>]*)?>.*?</tool_call\s*>", "", cleaned_raw, flags=re.DOTALL | re.IGNORECASE
@@ -1003,7 +1172,7 @@ class ChatCompletionService:
                                 if l.strip().startswith("MEDIA:"):
                                     generated_img_lines.append(_clean_media_tag(l.strip()))
                     except Exception as exc:  # noqa: BLE001
-                        _LOG.warning("Failed to fulfill unadvertised image tool call: %s", exc)
+                        _handle_image_generate_error(exc, img_prompt)
 
                 surrounding_text = re.sub(
                     r"<tool_call(?:\s+[^>]*)?>.*?</tool_call\s*>", "", cleaned_response, flags=re.DOTALL | re.IGNORECASE

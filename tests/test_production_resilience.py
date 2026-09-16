@@ -101,7 +101,7 @@ class ProductionResilienceTests(unittest.TestCase):
         self.assertTrue(is_transient_backend_error(
             BackendError("503 Service Unavailable")
         ))
-        self.assertTrue(is_transient_backend_error(
+        self.assertFalse(is_transient_backend_error(
             BackendError("429 Too Many Requests: rate limit exceeded")
         ))
         self.assertTrue(is_transient_backend_error(

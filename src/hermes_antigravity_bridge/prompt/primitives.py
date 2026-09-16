@@ -530,7 +530,7 @@ def recent_history(
         i for i, m in enumerate(messages)
         if str(m.get("role") or "").lower() == "tool"
     ]
-    recent_tool_indices = set(tool_indices_in_messages[-2:])
+    recent_tool_indices = set(tool_indices_in_messages[-1:])
 
     def _serialize_candidate(idx: int, lim: int | None = None) -> str:
         msg = messages[idx]

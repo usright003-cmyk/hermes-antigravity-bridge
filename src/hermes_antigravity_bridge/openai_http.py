@@ -250,7 +250,7 @@ def _safe_client_message(error: BridgeError) -> str:
     return " ".join(str(error).split())[:300]
 
 
-_SLOT_ACQUIRE_TIMEOUT_SECONDS: float = 0.05
+_SLOT_ACQUIRE_TIMEOUT_SECONDS: float = 5.0
 
 
 class BridgeMetrics:

@@ -48,7 +48,7 @@ class BlockingBackend(FakeBackend):
 
     def generate(self, prompt, model):
         self.entered.set()
-        if not self.release.wait(timeout=5):
+        if not self.release.wait(timeout=15):
             raise RuntimeError("test release timeout")
         return super().generate(prompt, model)
 
@@ -412,7 +412,7 @@ class HTTPContractTests(unittest.TestCase):
                 method="POST",
             )
             try:
-                with urllib.request.urlopen(request, timeout=5) as response:
+                with urllib.request.urlopen(request, timeout=10) as response:
                     return response.status
             except urllib.error.HTTPError as exc:
                 return exc.code
@@ -425,7 +425,7 @@ class HTTPContractTests(unittest.TestCase):
             self.assertEqual(post(), 429)
         finally:
             backend.release.set()
-            first_thread.join(timeout=5)
+            first_thread.join(timeout=10)
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)

@@ -115,6 +115,13 @@ class HermesPromptBuilder:
                     new_msg["content"] = compact_tool_output(c)
                     sanitized_messages.append(new_msg)
                     continue
+                elif isinstance(c, list):
+                    raw_text = text_content(c)
+                    if len(raw_text) > 32_000:
+                        new_msg = dict(msg)
+                        new_msg["content"] = compact_tool_output(raw_text)
+                        sanitized_messages.append(new_msg)
+                        continue
             sanitized_messages.append(msg)
         messages = sanitized_messages
 

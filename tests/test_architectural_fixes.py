@@ -1,6 +1,7 @@
 import json
 import sys
 import threading
+import time
 import unittest
 import urllib.request
 from pathlib import Path
@@ -591,6 +592,172 @@ class StreamingSSEProtocolTests(unittest.TestCase):
             {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "query", "arguments": "{}"}}]},
             {"role": "tool", "tool_call_id": "c1", "name": "query", "content": giant_tool_output},
             {"role": "user", "content": "what did it say?"},
+        ]
+        prompt = builder.build(messages)
+        self.assertLess(len(prompt), 35000)
+    def test_slot_acquire_timeout_is_five_seconds(self):
+        from hermes_antigravity_bridge.openai_http import _SLOT_ACQUIRE_TIMEOUT_SECONDS
+        self.assertEqual(_SLOT_ACQUIRE_TIMEOUT_SECONDS, 5.0)
+
+    def test_queued_slot_acquisition_succeeds_when_slot_freed_within_5s(self):
+        backend_busy = threading.Event()
+        backend_release = threading.Event()
+
+        class TransientBusyBackend:
+            def list_models(self, *, force_refresh=False):
+                return ("model-a",)
+
+            def resolve_model(self, requested):
+                return requested
+
+            def generate(self, prompt, model):
+                if "first" in prompt:
+                    backend_busy.set()
+                    backend_release.wait(timeout=5)
+                return BackendResponse(response=f"echo:{prompt}", model=model, usage={})
+
+        token = "test-token-fixed-length-123456789012"
+        config = BridgeConfig(
+            server=ServerConfig(
+                host="127.0.0.1",
+                port=0,
+                token=token,
+                request_body_limit_bytes=4096,
+                max_concurrent_requests=1,
+            ),
+            antigravity=AntigravityConfig(binary=Path(sys.executable)),
+            prompt=PromptBudget(),
+        )
+        service = ChatCompletionService(
+            backend=TransientBusyBackend(),
+            prompt_builder=HermesPromptBuilder(),
+            prompt_budget=config.prompt,
+        )
+        server = create_http_server(config, service)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        port = server.server_address[1]
+
+        def call_endpoint(msg: str) -> int:
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/v1/chat/completions",
+                data=json.dumps({"model": "model-a", "messages": [{"role": "user", "content": msg}]}).encode("utf-8"),
+                headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    return resp.status
+            except urllib.error.HTTPError as exc:
+                return exc.code
+
+        # Start first request that holds the slot for 0.5s
+        t1_status: list[int] = []
+        t1 = threading.Thread(target=lambda: t1_status.append(call_endpoint("first")))
+        t1.start()
+        self.assertTrue(backend_busy.wait(timeout=2))
+
+        # Start second request while first is holding slot
+        t2_status: list[int] = []
+        t2 = threading.Thread(target=lambda: t2_status.append(call_endpoint("second")))
+        t2.start()
+
+        # Release first slot after 0.5s (well within 5.0s slot acquire timeout)
+        time.sleep(0.5)
+        backend_release.set()
+
+        t1.join(timeout=5)
+        t2.join(timeout=5)
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+        self.assertEqual(t1_status, [200])
+        self.assertEqual(t2_status, [200])
+
+    def test_tool_call_delta_with_trailing_text_does_not_duplicate_or_leak(self):
+        class TrailingTextStreamBackend:
+            def list_models(self, *, force_refresh=False):
+                return ("model-a",)
+
+            def resolve_model(self, requested):
+                return requested
+
+            def generate_stream(self, prompt, model, **kwargs):
+                yield {"type": "delta", "content": '<tool_call>{"name": "bash", "arguments": {"comm'}
+                yield {"type": "delta", "content": 'and": "ls"}}</tool_call> All done!'}
+                yield {
+                    "type": "result",
+                    "response": BackendResponse(
+                        response='<tool_call>{"name": "bash", "arguments": {"command": "ls"}}</tool_call> All done!',
+                        model=model,
+                        usage={},
+                    ),
+                }
+
+        token = "test-token-fixed-length-123456789012"
+        config = BridgeConfig(
+            server=ServerConfig(
+                host="127.0.0.1",
+                port=0,
+                token=token,
+                request_body_limit_bytes=4096,
+                max_concurrent_requests=1,
+            ),
+            antigravity=AntigravityConfig(binary=Path(sys.executable)),
+            prompt=PromptBudget(),
+        )
+        service = ChatCompletionService(
+            backend=TrailingTextStreamBackend(),
+            prompt_builder=HermesPromptBuilder(),
+            prompt_budget=config.prompt,
+        )
+        server = create_http_server(config, service)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            url = f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions"
+            body = json.dumps({
+                "model": "model-a",
+                "messages": [{"role": "user", "content": "run ls"}],
+                "tools": [{"type": "function", "function": {"name": "bash", "parameters": {}}}],
+                "stream": True,
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=body,
+                headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                self.assertEqual(resp.status, 200)
+                content = resp.read().decode("utf-8")
+                lines = [line.removeprefix("data: ").strip() for line in content.splitlines() if line.startswith("data: ")]
+                chunks = [json.loads(line) for line in lines if line != "[DONE]"]
+
+                # Check text deltas:
+                # 1. </tool_call> must never leak into delta content
+                text_deltas = [
+                    c["choices"][0]["delta"]["content"]
+                    for c in chunks
+                    if c.get("choices") and "content" in c["choices"][0].get("delta", {})
+                ]
+                full_text = "".join(text_deltas)
+                self.assertNotIn("</tool_call>", full_text)
+                self.assertEqual(full_text.strip(), "All done!")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_giant_tool_message_with_content_list_compacted_in_builder(self):
+        builder = HermesPromptBuilder()
+        giant_tool_output = [{"type": "text", "text": "Y" * 50000}]
+        messages = [
+            {"role": "user", "content": "fetch docs"},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "scrape", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "c1", "name": "scrape", "content": giant_tool_output},
+            {"role": "user", "content": "summarize docs"},
         ]
         prompt = builder.build(messages)
         self.assertLess(len(prompt), 35000)

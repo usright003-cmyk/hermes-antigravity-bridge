@@ -826,7 +826,12 @@ class ChatCompletionService:
                     tool_call_name = ""
                     tool_call_is_advertised = True
                     arg_streamed_chars = 0
-                    pending_buffer = tool_call_buffer[end_m.end():] + pending_buffer
+                    trailing = tool_call_buffer[end_m.end():]
+                    if trailing.startswith("\r\n"):
+                        trailing = trailing[2:]
+                    elif trailing.startswith(("\n", "\r")):
+                        trailing = trailing[1:]
+                    pending_buffer = trailing + pending_buffer
                     tool_call_buffer = ""
 
             try:
@@ -854,9 +859,10 @@ class ChatCompletionService:
                             tool_call_buffer += text
                             for ev in _parse_tool_buffer():
                                 yield ev
-                            if not pending_buffer:
+                            if in_tool_call or not pending_buffer:
                                 continue
-                        pending_buffer += text
+                        else:
+                            pending_buffer += text
                         while pending_buffer:
                             if in_thought:
                                 lowered = pending_buffer.lower()
@@ -928,7 +934,9 @@ class ChatCompletionService:
                                         pending_buffer = ""
                                         for ev in _parse_tool_buffer():
                                             yield ev
-                                        break
+                                        if in_tool_call:
+                                            break
+                                        continue
                                     else:
                                         pending_buffer = pending_buffer[idx:]
                                         break
@@ -1014,7 +1022,13 @@ class ChatCompletionService:
                             if generated_img_lines:
                                 media_block = "\n".join(generated_img_lines)
                                 if streamed_text:
-                                    unstreamed = "" if already_has_media else f"\n\n{media_block}"
+                                    unstreamed_surrounding = _extract_unstreamed_text(clean_surrounding, streamed_text)
+                                    if already_has_media:
+                                        unstreamed = unstreamed_surrounding
+                                    elif unstreamed_surrounding:
+                                        unstreamed = f"{unstreamed_surrounding}\n\n{media_block}"
+                                    else:
+                                        unstreamed = f"\n\n{media_block}"
                                 else:
                                     if clean_surrounding:
                                         unstreamed = f"{clean_surrounding}\n\n{media_block}"
@@ -1023,7 +1037,7 @@ class ChatCompletionService:
                                         unstreamed = f"{header}\n\n{media_block}"
                             else:
                                 if streamed_text:
-                                    unstreamed = ""
+                                    unstreamed = _extract_unstreamed_text(clean_surrounding or cleaned_raw, streamed_text)
                                 else:
                                     unstreamed = clean_surrounding or cleaned_raw
                             if unstreamed:

@@ -325,6 +325,7 @@ class BridgeConfig:
             "1.2.0",
             "1.2.1",
             "1.2.2",
+            "1.2.3",
         ]
         validated_versions_value = agy_raw.get("validated_versions", default_versions)
         if not isinstance(validated_versions_value, list) or not validated_versions_value:

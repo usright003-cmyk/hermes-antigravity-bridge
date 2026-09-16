@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from typing import Any
 
 from .contracts import ChatCompletionResult, TextBackend
@@ -74,15 +74,18 @@ def _strip_media_lines(text: str) -> str:
     return "\n".join(lines).strip()
 
 
-def _deduplicate_media_lines(text: str) -> str:
-    """Ensure text contains at most one clean MEDIA:<path> line at the end,
+def _deduplicate_media_lines(text: str, keep_all_distinct: bool = False) -> str:
+    """Ensure text contains clean unique MEDIA:<path> lines at the end,
 
-    stripping any duplicate MEDIA: lines or unwanted MEDIA_URL: tags.
+    stripping duplicate identical MEDIA: lines or unwanted MEDIA_URL: tags.
+    When keep_all_distinct is True, preserves all unique media paths.
+    When keep_all_distinct is False, preserves only the final media path for single-image mode.
     """
     if "MEDIA:" not in text and "MEDIA_URL:" not in text and "/v1/media/" not in text:
         return text
     lines = text.splitlines()
     media_paths: list[str] = []
+    seen_paths: set[str] = set()
     non_media_lines: list[str] = []
     for line in lines:
         sline = line.strip()
@@ -92,13 +95,17 @@ def _deduplicate_media_lines(text: str) -> str:
             continue
         if sline.startswith("MEDIA:"):
             cand = sline.removeprefix("MEDIA:").strip().strip("'\"")
-            if cand:
+            if cand and cand not in seen_paths:
+                seen_paths.add(cand)
                 media_paths.append(cand)
         else:
             non_media_lines.append(line)
     if not media_paths:
         return "\n".join(non_media_lines).strip()
-    clean_tag = f"MEDIA:{media_paths[-1]}"
+    if keep_all_distinct:
+        clean_tag = "\n".join(f"MEDIA:{p}" for p in media_paths)
+    else:
+        clean_tag = f"MEDIA:{media_paths[-1]}"
     remaining_text = "\n".join(non_media_lines).strip()
     if remaining_text:
         return f"{remaining_text}\n\n{clean_tag}"
@@ -153,21 +160,23 @@ def _filter_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(tools)
 
 
-def _extract_unadvertised_image_tool_call(
-    text: str, allowed_tool_names: set[str]
-) -> tuple[str, str, str | None] | None:
-    """Detect if model emitted an image tool call that Hermes did not advertise.
+def _extract_unadvertised_image_tool_calls(
+    text: str, allowed_tool_names: Collection[str]
+) -> list[tuple[str, str, str | None]]:
+    """Scan response text for <tool_call> blocks requesting image generation
 
-    Returns (tool_name, prompt, aspect_ratio) or None.
+    when Hermes did not advertise an image tool.
+    Returns list of (tool_name, prompt, aspect_ratio).
     """
     if "<tool_call" not in text.lower():
-        return None
+        return []
     image_tool_names = {"generate_image", "image_gen", "image_generation", "text_to_image", "draw_image"}
     if any(name.lower() in allowed_tool_names for name in image_tool_names):
-        return None
+        return []
 
     tag_start = re.compile(r"<tool_call(?:\s+[^>]*)?>", re.IGNORECASE)
     tag_end = re.compile(r"</tool_call\s*>", re.IGNORECASE)
+    calls: list[tuple[str, str, str | None]] = []
     for start_match in tag_start.finditer(text):
         end_match = tag_end.search(text, start_match.end())
         if not end_match:
@@ -220,8 +229,16 @@ def _extract_unadvertised_image_tool_call(
                         or args_lower.get("aspect_ratio")
                         or ""
                     ).strip() or None
-                    return fn_name, prompt, aspect
-    return None
+                    calls.append((fn_name, prompt, aspect))
+    return calls
+
+
+def _extract_unadvertised_image_tool_call(
+    text: str, allowed_tool_names: Collection[str]
+) -> tuple[str, str, str | None] | None:
+    """Backward-compatible helper returning the first unadvertised image tool call if any."""
+    calls = _extract_unadvertised_image_tool_calls(text, allowed_tool_names)
+    return calls[0] if calls else None
 
 
 def _extract_unstreamed_text(full_text: str, streamed_text: str) -> str:
@@ -494,45 +511,51 @@ class ChatCompletionService:
             "total_tokens": int(usage.get("total_tokens", 0) or 0),
         }
 
-        unadvertised_img = _extract_unadvertised_image_tool_call(cleaned_response, allowed_names)
-        if unadvertised_img:
-            _, img_prompt, aspect_ratio = unadvertised_img
-            _LOG.info("Executing unadvertised image tool call via native generate_image: %s", img_prompt)
-            img_req = f"Please generate an image using your native generate_image tool. Image prompt: {img_prompt}"
-            if aspect_ratio:
-                img_req += f", AspectRatio: {aspect_ratio}"
-            try:
-                img_backend_res = self.backend.generate(img_req, actual_model)
-                img_line = next(
-                    (line.strip() for line in img_backend_res.response.splitlines() if line.strip().startswith("MEDIA:")),
-                    None,
-                )
-                surrounding_text = re.sub(
-                    r"<tool_call(?:\s+[^>]*)?>.*?</tool_call\s*>", "", cleaned_response, flags=re.DOTALL | re.IGNORECASE
-                ).strip()
-                clean_surrounding = _strip_media_lines(surrounding_text)
-                if img_line:
-                    clean_img_line = _clean_media_tag(img_line)
-                    if clean_surrounding:
-                        resp_text = f"{clean_surrounding}\n\n{clean_img_line}"
-                    else:
-                        resp_text = f"Here is the generated image for: {img_prompt}\n\n{clean_img_line}"
+        unadvertised_imgs = _extract_unadvertised_image_tool_calls(cleaned_response, allowed_names)
+        if unadvertised_imgs:
+            generated_img_lines: list[str] = []
+            for _, img_prompt, aspect_ratio in unadvertised_imgs:
+                _LOG.info("Executing unadvertised image tool call via native generate_image: %s", img_prompt)
+                img_req = f"Please generate an image using your native generate_image tool. Image prompt: {img_prompt}"
+                if aspect_ratio:
+                    img_req += f", AspectRatio: {aspect_ratio}"
+                try:
+                    img_backend_res = self.backend.generate(img_req, actual_model)
+                    img_line = next(
+                        (line.strip() for line in img_backend_res.response.splitlines() if line.strip().startswith("MEDIA:")),
+                        None,
+                    )
+                    if img_line:
+                        generated_img_lines.append(_clean_media_tag(img_line))
+                    elif "MEDIA:" in img_backend_res.response:
+                        for l in img_backend_res.response.splitlines():
+                            if l.strip().startswith("MEDIA:"):
+                                generated_img_lines.append(_clean_media_tag(l.strip()))
+                except Exception as exc:  # noqa: BLE001
+                    _LOG.warning("Failed to fulfill unadvertised image tool call for %r: %s", img_prompt, exc)
+
+            surrounding_text = re.sub(
+                r"<tool_call(?:\s+[^>]*)?>.*?</tool_call\s*>", "", cleaned_response, flags=re.DOTALL | re.IGNORECASE
+            ).strip()
+            clean_surrounding = _strip_media_lines(surrounding_text)
+            if generated_img_lines:
+                media_block = "\n".join(generated_img_lines)
+                if clean_surrounding:
+                    resp_text = f"{clean_surrounding}\n\n{media_block}"
                 else:
-                    if clean_surrounding:
-                        resp_text = f"{clean_surrounding}\n\n{img_backend_res.response}".strip()
-                    else:
-                        resp_text = img_backend_res.response
-                resp_text = _deduplicate_media_lines(resp_text)
-                return ChatCompletionResult(
-                    text=resp_text,
-                    tool_calls=[],
-                    usage=normalized_usage,
-                    requested_model=requested,
-                    actual_model=actual_model,
-                    reasoning_content=reasoning_content,
-                )
-            except Exception as exc:  # noqa: BLE001
-                _LOG.warning("Failed to fulfill unadvertised image tool call: %s", exc)
+                    header = "Here is the generated image:" if len(generated_img_lines) == 1 else "Here are the generated images:"
+                    resp_text = f"{header}\n\n{media_block}"
+            else:
+                resp_text = clean_surrounding or cleaned_response
+            resp_text = _deduplicate_media_lines(resp_text, keep_all_distinct=True)
+            return ChatCompletionResult(
+                text=resp_text,
+                tool_calls=[],
+                usage=normalized_usage,
+                requested_model=requested,
+                actual_model=actual_model,
+                reasoning_content=reasoning_content,
+            )
 
         parsed = parse_tool_calls(
             cleaned_response,
@@ -667,6 +690,11 @@ class ChatCompletionService:
                     elif etype == "delta":
                         text = str(event.get("content", ""))
                         if has_tool_call_start:
+                            yield {
+                                "type": "ping",
+                                "requested_model": requested,
+                                "actual_model": actual_model,
+                            }
                             continue
                         pending_buffer += text
                         while pending_buffer:
@@ -784,62 +812,68 @@ class ChatCompletionService:
                             "completion_tokens": int(usage.get("output_tokens", 0) or 0),
                             "total_tokens": int(usage.get("total_tokens", 0) or 0),
                         }
-                        unadvertised_img = _extract_unadvertised_image_tool_call(cleaned_raw, allowed_names)
-                        if unadvertised_img:
-                            _, img_prompt, aspect_ratio = unadvertised_img
-                            _LOG.info("Executing unadvertised image tool call in stream: %s", img_prompt)
-                            img_req = f"Please generate an image using your native generate_image tool. Image prompt: {img_prompt}"
-                            if aspect_ratio:
-                                img_req += f", AspectRatio: {aspect_ratio}"
-                            try:
-                                img_backend_res = self.backend.generate(img_req, actual_model)
-                                img_line = next(
-                                    (line.strip() for line in img_backend_res.response.splitlines() if line.strip().startswith("MEDIA:")),
-                                    None,
-                                )
-                                surrounding_text = re.sub(
-                                    r"<tool_call(?:\s+[^>]*)?>.*?</tool_call\s*>", "", cleaned_raw, flags=re.DOTALL | re.IGNORECASE
-                                ).strip()
-                                clean_surrounding = _strip_media_lines(surrounding_text)
-                                already_has_media = any(
-                                    l.strip().startswith("MEDIA:") for l in streamed_text.splitlines()
-                                )
-                                if img_line:
-                                    clean_img_line = _clean_media_tag(img_line)
-                                    if streamed_text:
-                                        unstreamed = "" if already_has_media else f"\n\n{clean_img_line}"
-                                    else:
-                                        if clean_surrounding:
-                                            unstreamed = f"{clean_surrounding}\n\n{clean_img_line}"
-                                        else:
-                                            unstreamed = f"Here is the generated image for: {img_prompt}\n\n{clean_img_line}"
+                        unadvertised_imgs = _extract_unadvertised_image_tool_calls(cleaned_raw, allowed_names)
+                        if unadvertised_imgs:
+                            generated_img_lines: list[str] = []
+                            for _, img_prompt, aspect_ratio in unadvertised_imgs:
+                                _LOG.info("Executing unadvertised image tool call in stream: %s", img_prompt)
+                                img_req = f"Please generate an image using your native generate_image tool. Image prompt: {img_prompt}"
+                                if aspect_ratio:
+                                    img_req += f", AspectRatio: {aspect_ratio}"
+                                try:
+                                    img_backend_res = self.backend.generate(img_req, actual_model)
+                                    img_line = next(
+                                        (line.strip() for line in img_backend_res.response.splitlines() if line.strip().startswith("MEDIA:")),
+                                        None,
+                                    )
+                                    if img_line:
+                                        generated_img_lines.append(_clean_media_tag(img_line))
+                                    elif "MEDIA:" in img_backend_res.response:
+                                        for l in img_backend_res.response.splitlines():
+                                            if l.strip().startswith("MEDIA:"):
+                                                generated_img_lines.append(_clean_media_tag(l.strip()))
+                                except Exception as exc:  # noqa: BLE001
+                                    _LOG.warning("Failed to fulfill unadvertised image tool call in stream: %s", exc)
+
+                            surrounding_text = re.sub(
+                                r"<tool_call(?:\s+[^>]*)?>.*?</tool_call\s*>", "", cleaned_raw, flags=re.DOTALL | re.IGNORECASE
+                            ).strip()
+                            clean_surrounding = _strip_media_lines(surrounding_text)
+                            already_has_media = any(
+                                l.strip().startswith("MEDIA:") for l in streamed_text.splitlines()
+                            )
+                            if generated_img_lines:
+                                media_block = "\n".join(generated_img_lines)
+                                if streamed_text:
+                                    unstreamed = "" if already_has_media else f"\n\n{media_block}"
                                 else:
-                                    if streamed_text:
-                                        unstreamed = "" if already_has_media else f"\n\n{img_backend_res.response}"
+                                    if clean_surrounding:
+                                        unstreamed = f"{clean_surrounding}\n\n{media_block}"
                                     else:
-                                        if clean_surrounding:
-                                            unstreamed = f"{clean_surrounding}\n\n{img_backend_res.response}".strip()
-                                        else:
-                                            unstreamed = img_backend_res.response
-                                if unstreamed:
-                                    unstreamed = _deduplicate_media_lines(unstreamed)
-                                if unstreamed:
-                                    yield {
-                                        "type": "delta",
-                                        "content": unstreamed,
-                                        "requested_model": requested,
-                                        "actual_model": actual_model,
-                                    }
+                                        header = "Here is the generated image:" if len(generated_img_lines) == 1 else "Here are the generated images:"
+                                        unstreamed = f"{header}\n\n{media_block}"
+                            else:
+                                if streamed_text:
+                                    unstreamed = ""
+                                else:
+                                    unstreamed = clean_surrounding or cleaned_raw
+                            if unstreamed:
+                                unstreamed = _deduplicate_media_lines(unstreamed, keep_all_distinct=True)
+                            if unstreamed:
                                 yield {
-                                    "type": "finish",
-                                    "finish_reason": "stop",
-                                    "usage": normalized_usage,
+                                    "type": "delta",
+                                    "content": unstreamed,
                                     "requested_model": requested,
                                     "actual_model": actual_model,
                                 }
-                                return
-                            except Exception as exc:  # noqa: BLE001
-                                _LOG.warning("Failed to fulfill unadvertised image tool call in stream: %s", exc)
+                            yield {
+                                "type": "finish",
+                                "finish_reason": "stop",
+                                "usage": normalized_usage,
+                                "requested_model": requested,
+                                "actual_model": actual_model,
+                            }
+                            return
 
                         try:
                             parsed = parse_tool_calls(
@@ -949,50 +983,56 @@ class ChatCompletionService:
                 "completion_tokens": int(usage.get("output_tokens", 0) or 0),
                 "total_tokens": int(usage.get("total_tokens", 0) or 0),
             }
-            unadvertised_img = _extract_unadvertised_image_tool_call(cleaned_response, allowed_names)
-            if unadvertised_img:
-                _, img_prompt, aspect_ratio = unadvertised_img
-                img_req = f"Please generate an image using your native generate_image tool. Image prompt: {img_prompt}"
-                if aspect_ratio:
-                    img_req += f", AspectRatio: {aspect_ratio}"
-                try:
-                    img_backend_res = self.backend.generate(img_req, actual_model)
-                    img_line = next(
-                        (line.strip() for line in img_backend_res.response.splitlines() if line.strip().startswith("MEDIA:")),
-                        None,
-                    )
-                    surrounding_text = re.sub(
-                        r"<tool_call(?:\s+[^>]*)?>.*?</tool_call\s*>", "", cleaned_response, flags=re.DOTALL | re.IGNORECASE
-                    ).strip()
-                    clean_surrounding = _strip_media_lines(surrounding_text)
-                    if img_line:
-                        clean_img_line = _clean_media_tag(img_line)
-                        if clean_surrounding:
-                            resp_text = f"{clean_surrounding}\n\n{clean_img_line}"
-                        else:
-                            resp_text = f"Here is the generated image for: {img_prompt}\n\n{clean_img_line}"
+            unadvertised_imgs = _extract_unadvertised_image_tool_calls(cleaned_response, allowed_names)
+            if unadvertised_imgs:
+                generated_img_lines: list[str] = []
+                for _, img_prompt, aspect_ratio in unadvertised_imgs:
+                    img_req = f"Please generate an image using your native generate_image tool. Image prompt: {img_prompt}"
+                    if aspect_ratio:
+                        img_req += f", AspectRatio: {aspect_ratio}"
+                    try:
+                        img_backend_res = self.backend.generate(img_req, actual_model)
+                        img_line = next(
+                            (line.strip() for line in img_backend_res.response.splitlines() if line.strip().startswith("MEDIA:")),
+                            None,
+                        )
+                        if img_line:
+                            generated_img_lines.append(_clean_media_tag(img_line))
+                        elif "MEDIA:" in img_backend_res.response:
+                            for l in img_backend_res.response.splitlines():
+                                if l.strip().startswith("MEDIA:"):
+                                    generated_img_lines.append(_clean_media_tag(l.strip()))
+                    except Exception as exc:  # noqa: BLE001
+                        _LOG.warning("Failed to fulfill unadvertised image tool call: %s", exc)
+
+                surrounding_text = re.sub(
+                    r"<tool_call(?:\s+[^>]*)?>.*?</tool_call\s*>", "", cleaned_response, flags=re.DOTALL | re.IGNORECASE
+                ).strip()
+                clean_surrounding = _strip_media_lines(surrounding_text)
+                if generated_img_lines:
+                    media_block = "\n".join(generated_img_lines)
+                    if clean_surrounding:
+                        resp_text = f"{clean_surrounding}\n\n{media_block}"
                     else:
-                        if clean_surrounding:
-                            resp_text = f"{clean_surrounding}\n\n{img_backend_res.response}".strip()
-                        else:
-                            resp_text = img_backend_res.response
-                        resp_text = _deduplicate_media_lines(resp_text)
-                    yield {
-                        "type": "delta",
-                        "content": resp_text,
-                        "requested_model": requested,
-                        "actual_model": actual_model,
-                    }
-                    yield {
-                        "type": "finish",
-                        "finish_reason": "stop",
-                        "usage": normalized_usage,
-                        "requested_model": requested,
-                        "actual_model": actual_model,
-                    }
-                    return
-                except Exception as exc:  # noqa: BLE001
-                    _LOG.warning("Failed to fulfill unadvertised image tool call: %s", exc)
+                        header = "Here is the generated image:" if len(generated_img_lines) == 1 else "Here are the generated images:"
+                        resp_text = f"{header}\n\n{media_block}"
+                else:
+                    resp_text = clean_surrounding or cleaned_response
+                resp_text = _deduplicate_media_lines(resp_text, keep_all_distinct=True)
+                yield {
+                    "type": "delta",
+                    "content": resp_text,
+                    "requested_model": requested,
+                    "actual_model": actual_model,
+                }
+                yield {
+                    "type": "finish",
+                    "finish_reason": "stop",
+                    "usage": normalized_usage,
+                    "requested_model": requested,
+                    "actual_model": actual_model,
+                }
+                return
 
             parsed = parse_tool_calls(
                 cleaned_response,

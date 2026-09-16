@@ -79,14 +79,15 @@ def _store_media_file(src_path: Path, media_dir: Path) -> str | None:
 
 
 def _deduplicate_media_lines(text: str) -> str:
-    """Ensure text contains at most one clean MEDIA:<path> line at the end,
+    """Ensure text contains clean unique MEDIA:<path> lines at the end,
 
-    stripping any duplicate MEDIA: lines or unwanted MEDIA_URL: tags.
+    stripping duplicate identical MEDIA: lines or unwanted MEDIA_URL: tags.
     """
     if "MEDIA:" not in text and "MEDIA_URL:" not in text and "/v1/media/" not in text:
         return text
     lines = text.splitlines()
     media_paths: list[str] = []
+    seen_paths: set[str] = set()
     non_media_lines: list[str] = []
     for line in lines:
         sline = line.strip()
@@ -96,28 +97,29 @@ def _deduplicate_media_lines(text: str) -> str:
             continue
         if sline.startswith("MEDIA:"):
             cand = sline.removeprefix("MEDIA:").strip().strip("'\"")
-            if cand:
+            if cand and cand not in seen_paths:
+                seen_paths.add(cand)
                 media_paths.append(cand)
         else:
             non_media_lines.append(line)
     if not media_paths:
         return "\n".join(non_media_lines).strip()
-    clean_tag = f"MEDIA:{media_paths[-1]}"
+    media_block = "\n".join(f"MEDIA:{p}" for p in media_paths)
     remaining_text = "\n".join(non_media_lines).strip()
     if remaining_text:
-        return f"{remaining_text}\n\n{clean_tag}"
-    return clean_tag
+        return f"{remaining_text}\n\n{media_block}"
+    return media_block
 
 
 class _StreamMediaFilter:
     """Filter for chat completion SSE streams to strip MEDIA_URL lines,
 
     suppress localhost /v1/media/ markdown image clutter, and ensure
-    at most one clean MEDIA:<path> line is emitted across streaming chunks.
+    clean unique MEDIA:<path> lines are emitted across streaming chunks.
     """
 
     def __init__(self) -> None:
-        self.has_emitted_media: bool = False
+        self.emitted_media_paths: set[str] = set()
         self.buffer: str = ""
         self.pending_blanks: list[str] = []
 
@@ -156,7 +158,15 @@ class _StreamMediaFilter:
                 self.pending_blanks.append(line)
                 continue
 
-            is_dup_media = sline.startswith("MEDIA:") and self.has_emitted_media
+            cand_media_path = (
+                sline.removeprefix("MEDIA:").strip().strip("'\"")
+                if sline.startswith("MEDIA:")
+                else None
+            )
+            is_dup_media = (
+                cand_media_path is not None
+                and cand_media_path in self.emitted_media_paths
+            )
             is_unwanted = (
                 is_dup_media
                 or sline.startswith("MEDIA_URL:")
@@ -170,11 +180,10 @@ class _StreamMediaFilter:
                 to_emit.extend(self.pending_blanks)
                 self.pending_blanks.clear()
 
-            if sline.startswith("MEDIA:"):
-                cand_path = sline.removeprefix("MEDIA:").strip().strip("'\"")
+            if cand_media_path is not None:
                 ending = "\n" if line.endswith("\n") else ""
-                to_emit.append(f"MEDIA:{cand_path}{ending}")
-                self.has_emitted_media = True
+                to_emit.append(f"MEDIA:{cand_media_path}{ending}")
+                self.emitted_media_paths.add(cand_media_path)
             else:
                 to_emit.append(line)
 
@@ -191,7 +200,15 @@ class _StreamMediaFilter:
         to_emit: list[str] = []
         if self.buffer:
             srem = self.buffer.strip()
-            is_dup_media = srem.startswith("MEDIA:") and self.has_emitted_media
+            cand_media_path = (
+                srem.removeprefix("MEDIA:").strip().strip("'\"")
+                if srem.startswith("MEDIA:")
+                else None
+            )
+            is_dup_media = (
+                cand_media_path is not None
+                and cand_media_path in self.emitted_media_paths
+            )
             is_unwanted = (
                 is_dup_media
                 or srem.startswith("MEDIA_URL:")
@@ -201,10 +218,9 @@ class _StreamMediaFilter:
                 if self.pending_blanks:
                     to_emit.extend(self.pending_blanks)
                     self.pending_blanks.clear()
-                if srem.startswith("MEDIA:"):
-                    cand_path = srem.removeprefix("MEDIA:").strip().strip("'\"")
-                    to_emit.append(f"MEDIA:{cand_path}")
-                    self.has_emitted_media = True
+                if cand_media_path is not None:
+                    to_emit.append(f"MEDIA:{cand_media_path}")
+                    self.emitted_media_paths.add(cand_media_path)
                 else:
                     to_emit.append(self.buffer)
             else:

@@ -928,6 +928,71 @@ class TestMediaDeduplicationAndFiltering(unittest.TestCase):
         deduped = _deduplicate_media_lines(dup_text)
         self.assertEqual(deduped, "Intro.\n\nMEDIA:/tmp/2.png")
 
+    def test_multi_image_batch_support(self):
+        from hermes_antigravity_bridge.openai_http import (
+            _deduplicate_media_lines as http_dedupe,
+        )
+        from hermes_antigravity_bridge.openai_http import (
+            _StreamMediaFilter,
+        )
+        from hermes_antigravity_bridge.service import (
+            _deduplicate_media_lines,
+            _extract_unadvertised_image_tool_calls,
+        )
+
+        # 1. Extraction of 3 batch image tool calls
+        raw_model_output = (
+            "Here are the 3 requested images:\n"
+            "<tool_call>{\"name\": \"generate_image\", \"arguments\": {\"prompt\": \"A sunset over mountains\", \"aspect_ratio\": \"16:9\"}}</tool_call>\n"
+            "<tool_call>{\"name\": \"generate_image\", \"arguments\": {\"prompt\": \"A cozy cabin in snow\", \"aspect_ratio\": \"1:1\"}}</tool_call>\n"
+            "<tool_call>{\"name\": \"image_gen\", \"arguments\": {\"prompt\": \"A futuristic flying car\"}}</tool_call>"
+        )
+        calls = _extract_unadvertised_image_tool_calls(raw_model_output, allowed_tool_names={"read_file", "terminal"})
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(calls[0], ("generate_image", "A sunset over mountains", "16:9"))
+        self.assertEqual(calls[1], ("generate_image", "A cozy cabin in snow", "1:1"))
+        self.assertEqual(calls[2], ("image_gen", "A futuristic flying car", None))
+
+        # 2. Service media deduplication with keep_all_distinct=True
+        multi_media_text = (
+            "Here are the generated images:\n\n"
+            "MEDIA:/tmp/image1.png\n"
+            "MEDIA:/tmp/image2.png\n"
+            "MEDIA:/tmp/image3.png\n"
+            "MEDIA:/tmp/image1.png"  # Duplicate of image1
+        )
+        deduped = _deduplicate_media_lines(multi_media_text, keep_all_distinct=True)
+        expected = (
+            "Here are the generated images:\n\n"
+            "MEDIA:/tmp/image1.png\n"
+            "MEDIA:/tmp/image2.png\n"
+            "MEDIA:/tmp/image3.png"
+        )
+        self.assertEqual(deduped, expected)
+
+        # 3. HTTP deduplication preserves multiple distinct images
+        http_deduped = http_dedupe(multi_media_text)
+        self.assertEqual(http_deduped, expected)
+
+        # 4. StreamMediaFilter allows multiple distinct images without dropping 2nd or 3rd
+        filter_ = _StreamMediaFilter()
+        chunks = [
+            "Here are the images:\n",
+            "MEDIA:/tmp/image1.png\n",
+            "MEDIA:/tmp/image2.png\n",
+            "MEDIA:/tmp/image1.png\n",  # duplicate, should be skipped
+            "MEDIA:/tmp/image3.png\n",
+        ]
+        emitted: list[str] = []
+        for ch in chunks:
+            emitted.extend(filter_.process_chunk(ch))
+        emitted.extend(filter_.finish())
+        joined = "".join(emitted)
+        self.assertIn("MEDIA:/tmp/image1.png\n", joined)
+        self.assertIn("MEDIA:/tmp/image2.png\n", joined)
+        self.assertIn("MEDIA:/tmp/image3.png\n", joined)
+        self.assertEqual(joined.count("MEDIA:/tmp/image1.png"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

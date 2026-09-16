@@ -57,6 +57,46 @@ _TRANSIENT_MARKERS = (
 )
 
 
+def _format_media_response(response: str, media_tags: str | list[str] | None = None) -> str:
+    """Ensure response has clean unique MEDIA:<path> lines at the end,
+
+    preserving all distinct MEDIA: lines without duplicates.
+    """
+    if "MEDIA:" not in response and "MEDIA_URL:" not in response and "/v1/media/" not in response and not media_tags:
+        return response
+    lines = response.splitlines()
+    existing_paths: list[str] = []
+    seen_paths: set[str] = set()
+    non_media_lines: list[str] = []
+    for line in lines:
+        sline = line.strip()
+        if sline.startswith("MEDIA_URL:"):
+            continue
+        if sline.startswith("![") and "/v1/media/" in sline:
+            continue
+        if sline.startswith("MEDIA:"):
+            cand = sline.removeprefix("MEDIA:").strip().strip("'\"")
+            if cand and cand not in seen_paths:
+                seen_paths.add(cand)
+                existing_paths.append(cand)
+        else:
+            non_media_lines.append(line)
+
+    if media_tags:
+        tags_list = [media_tags] if isinstance(media_tags, str) else list(media_tags)
+        for tag in tags_list:
+            clean_cand = str(tag).strip().removeprefix("MEDIA:").strip().strip("'\"")
+            if clean_cand and clean_cand not in seen_paths:
+                seen_paths.add(clean_cand)
+                existing_paths.append(clean_cand)
+
+    cleaned_text = "\n".join(non_media_lines).strip()
+    if existing_paths:
+        media_block = "\n".join(f"MEDIA:{p}" for p in existing_paths)
+        return f"{cleaned_text}\n\n{media_block}".strip() if cleaned_text else media_block
+    return cleaned_text
+
+
 def _format_single_media_response(response: str, media_tag: str | None = None) -> str:
     """Ensure response has at most one clean MEDIA:<path> line at the end,
 
@@ -1221,10 +1261,11 @@ class AntigravityBackend:
         # Discover native Google Imagen generated images for this turn and attach MEDIA tag for Hermes
         conv_id = result.get("conversation_id")
         candidate_dirs: list[Path] = []
+        base_dirs = [self.config.home]
         if conv_id:
-            for base_dir in (Path.home(), self.config.home):
+            for base_dir in base_dirs:
                 candidate_dirs.append(base_dir / ".gemini" / "antigravity-cli" / "brain" / str(conv_id))
-        for base_dir in (Path.home(), self.config.home):
+        for base_dir in base_dirs:
             candidate_dirs.append(base_dir / ".gemini" / "antigravity-cli" / "media")
         candidate_dirs.append(cwd)
 
@@ -1249,28 +1290,34 @@ class AntigravityBackend:
 
         if img_candidates:
             img_candidates.sort(key=lambda p: (p.stat().st_mtime if p.is_file() else 0), reverse=True)
-            latest_img = img_candidates[0]
-            bridge_media_dir = (Path.home() / ".gemini" / "antigravity-cli" / "media").resolve()
+            bridge_media_dir = (self.config.home / ".gemini" / "antigravity-cli" / "media").resolve()
+            media_tags: list[str] = []
             try:
                 bridge_media_dir.mkdir(parents=True, exist_ok=True)
-                if latest_img.parent.resolve() != bridge_media_dir:
-                    dest_file = bridge_media_dir / latest_img.name
-                    if (
-                        dest_file.exists()
-                        and dest_file.resolve() != latest_img.resolve()
-                        and latest_img.stat().st_mtime > dest_file.stat().st_mtime
-                    ):
-                        dest_file = bridge_media_dir / f"{latest_img.stem}_{int(time.time()*1000)}{latest_img.suffix}"
-                    if not dest_file.exists() or latest_img.stat().st_mtime > dest_file.stat().st_mtime:
-                        shutil.copy2(latest_img, dest_file)
-                    latest_img = dest_file
-            except OSError as exc:
-                _LOG.debug("Could not copy image to media directory: %s", exc)
+            except OSError:
+                pass
+            for cand_img in img_candidates:
+                try:
+                    target_file = cand_img
+                    if cand_img.parent.resolve() != bridge_media_dir:
+                        dest_file = bridge_media_dir / cand_img.name
+                        if (
+                            dest_file.exists()
+                            and dest_file.resolve() != cand_img.resolve()
+                            and cand_img.stat().st_mtime > dest_file.stat().st_mtime
+                        ):
+                            dest_file = bridge_media_dir / f"{cand_img.stem}_{int(time.time()*1000)}{cand_img.suffix}"
+                        if not dest_file.exists() or cand_img.stat().st_mtime > dest_file.stat().st_mtime:
+                            shutil.copy2(cand_img, dest_file)
+                        target_file = dest_file
+                    media_tags.append(f"MEDIA:{target_file.as_posix()}")
+                except OSError as exc:
+                    _LOG.debug("Could not copy image %s to media directory: %s", cand_img, exc)
+                    media_tags.append(f"MEDIA:{cand_img.as_posix()}")
 
-            media_tag = f"MEDIA:{latest_img.as_posix()}"
-            response = _format_single_media_response(response, media_tag)
+            response = _format_media_response(response, media_tags)
         elif "MEDIA:" in response or "MEDIA_URL:" in response:
-            response = _format_single_media_response(response)
+            response = _format_media_response(response)
 
         result["response"] = response
         return result
@@ -1397,7 +1444,8 @@ class AntigravityBackend:
             ) as request_dir:
                 try:
                     for chunk in self._stream_attempt(prompt, model, Path(request_dir), effort=effort):
-                        yielded_chunks += 1
+                        if chunk.get("type") not in {"ping", "comment"}:
+                            yielded_chunks += 1
                         yield chunk
                     return
                 except BackendError as exc:
